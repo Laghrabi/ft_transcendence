@@ -1,0 +1,33 @@
+# Secrets & Local Config
+.env
+.env.local
+*.key
+*.pem
+nginx/ssl/*.crt
+nginx/ssl/*.key
+
+# Python / Django
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+*.sqlite3
+
+# Node / Frontend
+node_modules/
+dist/
+build/
+.npm
+
+# Docker / Volumes
+postgres_data/
+redis_data/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# DevOps Resources
+DevOps_Resources/
