@@ -1,0 +1,25 @@
+
+body 
+{
+          background-color: #f1f2ee;
+       
+}
+.flex
+{
+          display: flex;
+          width: 80%;
+          margin: 0 auto;
+}
+
+.left-panel
+{
+          width: 50%;
+          background-color: #4a7c59;
+
+}
+
+.right-panel
+{
+          width: 50%;
+          background-color: #faf6f0;
+}
