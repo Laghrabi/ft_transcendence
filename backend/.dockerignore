@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.sqlite3
+.git/
+.gitkeep
+node_modules/
+.env
+.env.local
+tests/
+*.md
