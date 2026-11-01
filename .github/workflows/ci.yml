@@ -1,0 +1,76 @@
+name: CareFlow CI
+
+on:
+  push:
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-infra:
+    name: Compose & Secret Hygiene Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Check for Committed Secrets or Private Keys
+        run: |
+          echo "Scanning git index for forbidden secret files..."
+          if git ls-files | grep -E '(\.env$|\.env\.local$|\.key$|\.pem$)'; then
+            echo "ERROR: Tracked secrets or private keys detected in git index!"
+            exit 1
+          fi
+          echo "No secret files detected in repository."
+
+      - name: Validate Docker Compose Configuration
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          echo "Docker compose configuration is valid."
+
+      - name: Build Docker Images
+        run: |
+          docker compose build
+
+  code-lint:
+    name: Code Quality & Linting Guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python Linters
+        run: pip install flake8 black
+
+      - name: Lint Backend Python Code
+        run: |
+          if [ -d "backend" ] && [ -n "$(find backend -name '*.py' 2>/dev/null)" ]; then
+            echo "Linting backend Python files..."
+            flake8 backend/ --max-line-length=120
+            black --check backend/
+          else
+            echo "No Python files found in backend/ yet."
+          fi
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check Frontend Workspace
+        run: |
+          if [ -f "frontend/package.json" ]; then
+            echo "Validating frontend package..."
+            cd frontend && npm ci
+          else
+            echo "No frontend package.json found yet."
+          fi
