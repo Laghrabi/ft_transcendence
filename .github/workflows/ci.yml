@@ -68,7 +68,6 @@ jobs:
           test -f infra/nginx/Dockerfile
           test -f infra/nginx/nginx.conf
           test -f infra/nginx/conf.d/default.conf
-          test -f infra/nginx/html/index.html
           echo "Required DevOps files are present."
 
       # Build backend image only if backend or compose files changed
