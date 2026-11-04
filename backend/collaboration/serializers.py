@@ -13,7 +13,7 @@ class CommentSerializer(serializers.ModelSerializer):
         text = text.strip()
         
         if len(text) > 200:
-            raise serializers.ValidationError("Comment must not exceed 50 characters.")
+            raise serializers.ValidationError("Comment must not exceed 200 characters.")
         return text
     
 

@@ -3,9 +3,14 @@ from  django.conf import settings
 
 
 
-# temporary class of case 
+# temporary class of case for testing purposes, will be replaced with the real one later :)
+
 class Case(models.Model):
     title = models.CharField(max_length=200)
+    members = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        blank=True
+    )
 
 
 class Comment(models.Model):
