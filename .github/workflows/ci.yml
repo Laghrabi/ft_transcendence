@@ -81,11 +81,14 @@ jobs:
       - name: Build Nginx Image
         if: steps.filter.outputs.nginx == 'true' || steps.filter.outputs.compose == 'true'
         run: |
+          ./infra/scripts/generate-ssl.sh
           echo "Building Nginx Docker image..."
           docker compose build nginx
           nginx_image="$(docker compose config --images | grep 'nginx$' | head -n 1)"
           test -n "$nginx_image"
-          docker run --rm --add-host backend:127.0.0.1 "$nginx_image" nginx -t
+          docker run --rm --add-host backend:127.0.0.1 \
+            -v "$(pwd)/infra/nginx/ssl:/etc/nginx/ssl:ro" \
+            "$nginx_image" nginx -t
 
   # TEMPORARILY DISABLED: Tests, Code Quality & Syntax Guardrails
 
