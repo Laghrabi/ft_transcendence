@@ -2,8 +2,12 @@ from django.contrib.auth.base_user import BaseUserManager
 
 class UserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
-        if not email:
+        if not isinstance(email, str) or not email.strip():
             raise ValueError("An email address is required")
+        
+        name = extra_fields.get("name")
+        if not isinstance(name, str) or not name.strip():
+             raise ValueError("A name is required")
         
         email = self.normalize_email(email)
         user = self.model(email=email, **extra_fields)

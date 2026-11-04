@@ -18,7 +18,7 @@ services:
       resources:
         limits:
           memory: 256M
-          cpus: "0.50"
+          # cpus: "0.50"
 
   redis:
     image: redis:7-alpine
@@ -38,7 +38,7 @@ services:
       resources:
         limits:
           memory: 128M
-          cpus: "0.25"
+          # cpus: "0.25"
 
   backend:
     build:
@@ -62,7 +62,7 @@ services:
       resources:
         limits:
           memory: 512M
-          cpus: "0.75"
+          #cpus: "0.75"
 
   nginx:
     build:
@@ -84,7 +84,7 @@ services:
       resources:
         limits:
           memory: 128M
-          cpus: "0.25"
+          #cpus: "0.25"
 
 volumes:
   postgres_data:
