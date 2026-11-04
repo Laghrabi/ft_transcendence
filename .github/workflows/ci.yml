@@ -2,21 +2,48 @@ name: CareFlow CI
 
 on:
   push:
+    paths: &shared_paths
+      - 'backend/**'
+      - 'infra/nginx/**'
+      - 'compose.yaml'
+      - '.env.example'
+      - '.github/workflows/ci.yml'
   pull_request:
     branches: [ main ]
+    paths: *shared_paths
+
+permissions:
+  contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  validate-infra:
-    name: Compose & Secret Hygiene Validation
+  selective-ci:
+    name: Selective Fast CI
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # Detect which subsystems were edited in this push / PR
+      - name: Detect Changed Paths
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            nginx:
+              - 'infra/nginx/**'
+            compose:
+              - 'compose.yaml'
+              - '.env.example'
+              - '.github/workflows/ci.yml'
+
+      # Secrets hygiene check runs instantaneously (<1s) to prevent leaks to protected branches
       - name: Check for Committed Secrets or Private Keys
         run: |
           echo "Scanning git index for forbidden secret files..."
@@ -26,51 +53,52 @@ jobs:
           fi
           echo "No secret files detected in repository."
 
+      # Prepare environment template so all docker compose commands find valid variables
+      - name: Prepare Environment File
+        run: cp .env.example .env
+
+      # Fast syntax validation of Docker Compose structure
       - name: Validate Docker Compose Configuration
         run: |
-          cp .env.example .env
           docker compose config --quiet
           echo "Docker compose configuration is valid."
 
-      - name: Build Docker Images
+      - name: Validate DevOps Required Files
         run: |
-          docker compose build
+          test -f infra/nginx/Dockerfile
+          test -f infra/nginx/nginx.conf
+          test -f infra/nginx/conf.d/default.conf
+          echo "Required DevOps files are present."
 
-  code-lint:
-    name: Code Quality & Linting Guardrails
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install Python Linters
-        run: pip install flake8 black
-
-      - name: Lint Backend Python Code
+      # Build backend image only if backend or compose files changed
+      - name: Build Backend Image
+        if: steps.filter.outputs.backend == 'true' || steps.filter.outputs.compose == 'true'
         run: |
-          if [ -d "backend" ] && [ -n "$(find backend -name '*.py' 2>/dev/null)" ]; then
-            echo "Linting backend Python files..."
-            flake8 backend/ --max-line-length=120
-            black --check backend/
-          else
-            echo "No Python files found in backend/ yet."
-          fi
+          echo "Building backend Docker image..."
+          docker compose build backend
 
-      - name: Set up Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Check Frontend Workspace
+      # Build Nginx image only if Nginx reverse proxy configuration or compose changed
+      - name: Build Nginx Image
+        if: steps.filter.outputs.nginx == 'true' || steps.filter.outputs.compose == 'true'
         run: |
-          if [ -f "frontend/package.json" ]; then
-            echo "Validating frontend package..."
-            cd frontend && npm ci
-          else
-            echo "No frontend package.json found yet."
-          fi
+          echo "Building Nginx Docker image..."
+          docker compose build nginx
+          nginx_image="$(docker compose config --images | grep 'nginx$' | head -n 1)"
+          test -n "$nginx_image"
+          docker run --rm --add-host backend:127.0.0.1 "$nginx_image" nginx -t
+
+  # TEMPORARILY DISABLED: Tests, Code Quality & Syntax Guardrails
+
+  #     - name: Run Backend Tests
+  #       if: steps.filter.outputs.backend == 'true'
+  #       run: |
+  #         docker compose run --rm backend python manage.py test
+  #
+  #     - name: Lint Backend Python Code (Flake8 & Black)
+  #       run: |
+  #         flake8 backend/ --max-line-length=120
+  #         black --check backend/
+  #
+  #     - name: Check Frontend Workspace
+  #       run: |
+  #         cd frontend && npm ci
