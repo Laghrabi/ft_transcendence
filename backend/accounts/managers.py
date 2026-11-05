@@ -9,6 +9,7 @@ class UserManager(BaseUserManager):
         if not isinstance(name, str) or not name.strip():
              raise ValueError("A name is required")
         
+        email = email.strip()
         email = self.normalize_email(email)
         user = self.model(email=email, **extra_fields)
         user.set_password(password)
@@ -16,7 +17,7 @@ class UserManager(BaseUserManager):
 
         return user
     
-    def create_superuser(self, email, password=None, **extra_fields):
+    def create_superuser(self, email, password, **extra_fields):
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
 
@@ -25,5 +26,8 @@ class UserManager(BaseUserManager):
 
         if extra_fields.get("is_superuser") is not True:
                 raise ValueError("Superuser must have is_superuser=True")
+        
+        if not isinstance(password, str) or not password.strip():
+            raise ValueError("A password is required")
 
         return self.create_user(email, password, **extra_fields)

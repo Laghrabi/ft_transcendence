@@ -1,6 +1,7 @@
 from rest_framework.test import APITestCase, APIClient
 from django.contrib.auth import get_user_model
 from rest_framework import status
+from django.test import TestCase
 
 
 class AuthenticationTests(APITestCase):
@@ -182,3 +183,47 @@ class AuthenticationTests(APITestCase):
         me_response = client.get("/api/auth/me/")
 
         self.assertEqual(me_response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class UserManagerTests(TestCase):
+
+    def test_create_user_without_email(self):
+        User = get_user_model()
+
+        with self.assertRaisesMessage(ValueError, "An email address is required"):
+            User.objects.create_user(
+                email=None,
+                password="Sara123!Test",
+                name="Sara"
+            )
+
+    def test_create_user_without_name(self):
+        User = get_user_model()
+
+        with self.assertRaisesMessage(ValueError, "A name is required"):
+            User.objects.create_user(
+                email="sara@example.com",
+                password="Sara123!Test"
+            )
+
+    def test_create_superuser_without_staff_permission(self):
+        User = get_user_model()
+
+        with self.assertRaisesMessage(ValueError, "Superuser must have is_staff=True"):
+            User.objects.create_superuser(
+                email="admin@example.com",
+                password="Admin123!Test",
+                name="Admin",
+                is_staff=False
+            )
+
+    def test_create_superuser_without_superuser_permission(self):
+        User = get_user_model()
+
+        with self.assertRaisesMessage(ValueError, "Superuser must have is_superuser=True"):
+            User.objects.create_superuser(
+                email="admin@example.com",
+                password="Admin123!Test",
+                name="Admin",
+                is_superuser=False
+            )
