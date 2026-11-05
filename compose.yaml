@@ -71,7 +71,7 @@ services:
     container_name: careflow_nginx
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "8080:80"
     volumes:
       - ./infra/nginx/conf.d:/etc/nginx/conf.d:ro
       - django_static:/var/www/static:ro
