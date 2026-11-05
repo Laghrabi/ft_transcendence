@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Comment
+from .models import Comment, Notification
 
 class CommentSerializer(serializers.ModelSerializer):
     
@@ -17,3 +17,9 @@ class CommentSerializer(serializers.ModelSerializer):
         return text
     
 
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = ["id", "recipient", "message", "is_read", "created_at"]
+        read_only_fields = ["id", "recipient", "message", "is_read", "created_at"]
+    

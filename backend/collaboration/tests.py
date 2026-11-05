@@ -1,13 +1,15 @@
-# from django.test import TestCase
-
-# from rest_framework.test import APITestCase
-
-
-# from django.contrib.auth import get_user_model
-# from django.urls import reverse
-# from rest_framework import status
-
-# from .models import Case, Comment
+from django.test import TestCase
+from rest_framework.test import APITestCase
+from django.contrib.auth import get_user_model
+from django.urls import reverse
+from rest_framework import status
+from .models import Case, Comment
+from django.contrib.auth import get_user_model
+from django.urls import reverse
+from rest_framework.test import APITestCase
+from .models import Notification
+from django.test import TestCase
+from collaboration.services.notifications import create_notification
 
 
 # class CommentAPITests(APITestCase):
@@ -246,6 +248,132 @@
 #             comment.content,
 #             "Important historical comment"
 #         )
+        
+    
+
+
+
+# class NotificationAPITests(APITestCase):
+
+#     def setUp(self):
+#         User = get_user_model()
+
+#         self.sara = User.objects.create_user(username="sara_notify")
+#         self.hamza = User.objects.create_user(username="hamza_notify")
+
+#         self.sara_notification = Notification.objects.create(
+#             recipient=self.sara,
+#             message="New task assigned"
+#         )
+
+#         self.hamza_notification = Notification.objects.create(
+#             recipient=self.hamza,
+#             message="Case completed"
+#         )
+
+#         self.list_url = reverse("notification_list")
+#         self.client.force_authenticate(user=self.sara)
+
+#     def test_new_notification_is_unread(self):
+#         self.assertFalse(self.sara_notification.is_read)
+
+#     def test_get_only_own_notifications(self):
+#         response = self.client.get(self.list_url)
+
+#         self.assertEqual(response.status_code, 200)
+
+#         notifications = response.data["notifications"]
+#         self.assertEqual(len(notifications), 1)
+#         self.assertEqual(
+#             notifications[0]["id"],
+#             self.sara_notification.id
+#         )
+
+#     def test_mark_own_notification_as_read(self):
+#         url = reverse(
+#             "read_notification",
+#             kwargs={"notification_id": self.sara_notification.id}
+#         )
+
+#         response = self.client.patch(url)
+
+#         self.assertEqual(response.status_code, 200)
+
+#         self.sara_notification.refresh_from_db()
+#         self.assertTrue(self.sara_notification.is_read)
+
+#     def test_cannot_mark_other_users_notification(self):
+#         url = reverse(
+#             "read_notification",
+#             kwargs={"notification_id": self.hamza_notification.id}
+#         )
+
+#         response = self.client.patch(url)
+
+#         self.assertEqual(response.status_code, 404)
+
+#         self.hamza_notification.refresh_from_db()
+#         self.assertFalse(self.hamza_notification.is_read)
+
+#     def test_nonexistent_notification(self):
+#         url = reverse(
+#             "read_notification",
+#             kwargs={"notification_id": 999999}
+#         )
+
+#         response = self.client.patch(url)
+
+#         self.assertEqual(response.status_code, 404)
+
+#     def test_unauthenticated_get(self):
+#         self.client.force_authenticate(user=None)
+
+#         response = self.client.get(self.list_url)
+
+#         self.assertIn(response.status_code, [401, 403])
+
+#     def test_unauthenticated_patch(self):
+#         self.client.force_authenticate(user=None)
+
+#         url = reverse(
+#             "read_notification",
+#             kwargs={"notification_id": self.sara_notification.id}
+#         )
+
+#         response = self.client.patch(url)
+
+#         self.assertIn(response.status_code, [401, 403])
+
+#         self.sara_notification.refresh_from_db()
+#         self.assertFalse(self.sara_notification.is_read)
+
+#     def test_hamza_sees_only_his_notifications(self):
+#         self.client.force_authenticate(user=self.hamza)
+
+#         response = self.client.get(self.list_url)
+
+#         self.assertEqual(response.status_code, 200)
+#         self.assertEqual(
+#             response.data["notifications"][0]["id"],
+#             self.hamza_notification.id
+#         )
+#         self.assertEqual(len(response.data["notifications"]), 1)
+   
+
+
+
+class NotificationServiceTests(TestCase):
+
+    def test_create_notification(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(
+            username="salma",
+            password="test_password_123!"
+        )
+        notification = create_notification(recipient= self.user, message="task from case 2")
+        self.assertEqual(notification.recipient, self.user)
+        self.assertFalse(notification.is_read)
+        
 # APITestCase	A DRF class for testing APIs
 # setUp()	Prepares fresh data before each test
 # self.client	A fake HTTP client used for testing
