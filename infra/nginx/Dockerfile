@@ -1,12 +1,17 @@
-FROM nginx:alpine
+FROM owasp/modsecurity-crs:nginx-alpine
 
-# Remove default nginx configuration
-RUN rm -f /etc/nginx/conf.d/default.conf
+USER root
+RUN rm -f /docker-entrypoint.d/01-check-low-port.sh
 
-# Copy our main nginx configuration and server blocks
-COPY nginx.conf /etc/nginx/nginx.conf
-COPY conf.d/ /etc/nginx/conf.d/
+ENV PORT=80
+ENV SSL_PORT=443
+ENV SERVER_NAME=localhost
+ENV MODSEC_RULE_ENGINE=on
+
+# Copy exclusions into CRS rules directory
+COPY modsecurity/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf /etc/modsecurity.d/owasp-crs/rules/
+
+# Copy default server block template
+COPY conf.d/default.conf /etc/nginx/templates/conf.d/default.conf.template
 
 EXPOSE 80 443
-
-CMD ["nginx", "-g", "daemon off;"]

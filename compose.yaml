@@ -1,4 +1,29 @@
 services:
+  vault:
+    image: hashicorp/vault:1.15
+    container_name: careflow_vault
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - vault_data:/vault/file
+      - vault_token:/vault/token
+      - ./infra/vault/config:/vault/config:ro
+      - ./infra/vault/scripts/entrypoint.sh:/entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    networks:
+      - data-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8200/v1/sys/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.50"
+
   db:
     image: postgres:16-alpine
     container_name: careflow_db
@@ -14,7 +39,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
-      start_period: 10s
     deploy:
       resources:
         limits:
@@ -35,7 +59,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
-      start_period: 5s
     deploy:
       resources:
         limits:
@@ -48,14 +71,19 @@ services:
       dockerfile: Dockerfile
     container_name: careflow_backend
     restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      DJANGO_DEBUG: "${DJANGO_DEBUG:-1}"
+      DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}"
+      DJANGO_ASGI_APP: "${DJANGO_ASGI_APP:-config.asgi:application}"
     volumes:
       - django_static:/app/staticfiles
+      - vault_token:/vault/token:ro
     depends_on:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      vault:
         condition: service_healthy
     networks:
       - data-net
@@ -76,7 +104,8 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./infra/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./infra/nginx/conf.d/default.conf:/etc/nginx/templates/conf.d/default.conf.template:ro
+      - ./infra/nginx/modsecurity/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:/etc/modsecurity.d/owasp-crs/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:ro
       - ./infra/nginx/ssl:/etc/nginx/ssl:ro
       - django_static:/var/www/static:ro
     depends_on:
@@ -87,22 +116,18 @@ services:
     deploy:
       resources:
         limits:
-          memory: 128M
-          cpus: "0.25"
+          memory: 256M
+          cpus: "0.50"
 
 volumes:
   postgres_data:
-    driver: local
   redis_data:
-    driver: local
   django_static:
-    driver: local
+  vault_data:
+  vault_token:
 
 networks:
   public-net:
-    driver: bridge
   app-net:
-    driver: bridge
   data-net:
-    driver: bridge
     internal: true
