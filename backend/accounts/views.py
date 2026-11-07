@@ -1,5 +1,5 @@
 from rest_framework.views import APIView
-from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth import authenticate, login, logout, get_user_model
 from rest_framework.response import Response
 from rest_framework import status
 from django.views.decorators.csrf import csrf_protect
@@ -7,26 +7,95 @@ from django.utils.decorators import method_decorator
 from django.middleware.csrf import get_token
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from .serializers import RegisterSerializer
 
 @method_decorator(csrf_protect, name="dispatch")
 class LoginView(APIView):
+    permission_classes = [AllowAny]
+
     def post(self, request):
         email = request.data.get("email")
         password = request.data.get("password")
 
-        user = authenticate(request, email=email, password=password)
-
-        if user is None:
+        if not isinstance(email, str) or not isinstance(password, str):
             return Response(
-                data={"message": "Invalid email or password"},
+                {"error": "Invalid email or password."},
                 status=status.HTTP_401_UNAUTHORIZED
             )
-        login(request, user)
+
+        authenticated_user = authenticate(
+            request,
+            email=email,
+            password=password
+        )
+
+        user = authenticated_user
+
+        if user is None:
+            User = get_user_model()
+            user = User.objects.filter(email=email).first()
+
+            if user is None or not user.check_password(password):
+                return Response(
+                    {"error": "Invalid email or password."},
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+
+        if user.approval_status == "pending":
+            return Response(
+                {"error": "Your account is awaiting administrator approval."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if user.approval_status == "rejected":
+            return Response(
+                {"error": "Your registration request was rejected."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if user.approval_status != "approved":
+            return Response(
+                {"error": "Your account is not approved."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if not user.is_active:
+            return Response(
+                {"error": "Your account is disabled."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if authenticated_user is None:
+            return Response(
+                {"error": "Invalid email or password."},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        login(request, authenticated_user)
+
         return Response(
-            data={"message": "Login successful"},
+            {"message": "Login successful."},
             status=status.HTTP_200_OK
         )
+
+# class LoginView(APIView):
+#     def post(self, request):
+#         email = request.data.get("email")
+#         password = request.data.get("password")
+
+#         user = authenticate(request, email=email, password=password)
+
+#         if user is None or user.approval_status != "approved":
+#             return Response(
+#                 data={"message": "Invalid email or password"},
+#                 status=status.HTTP_401_UNAUTHORIZED
+#             )
+#         login(request, user)
+#         return Response(
+#             data={"message": "Login successful"},
+#             status=status.HTTP_200_OK
+#         )
 
 @method_decorator(csrf_protect, name="dispatch")
 class LogoutView(APIView):
@@ -46,6 +115,23 @@ class MeView(APIView):
     def get(self, request):
         return Response(
             data={"id": request.user.id, "name": request.user.name, "email": request.user.email}
+        )
+
+@method_decorator(csrf_protect, name="dispatch")
+class RegisterView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = RegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        
+        return Response(
+            data={
+                "message": "Registration successful. Awaiting administrator approval.",
+                "id": user.id
+            },
+            status=status.HTTP_201_CREATED
         )
 
 @require_GET
