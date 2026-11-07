@@ -596,3 +596,172 @@ class RegistrationTests(TestCase):
 
         self.assertEqual(response.status_code, 405)
         self.assertEqual(self.User.objects.count(), 0)
+
+
+class PendingRegistrationsTests(TestCase):
+
+    @classmethod
+    def setUpTestData(cls):
+        User = get_user_model()
+
+        cls.pending_url = "/api/auth/registrations/pending/"
+
+        cls.admin = User.objects.create_superuser(
+            email="admin@example.com",
+            password="Admin123!Test",
+            name="Admin"
+        )
+
+        cls.nurse = User.objects.create_user(
+            email="nurse@example.com",
+            password="Nurse123!Test",
+            name="Nurse",
+            is_active=True,
+            approval_status="approved"
+        )
+
+        cls.staff_user = User.objects.create_user(
+            email="staff@example.com",
+            password="Staff123!Test",
+            name="Staff Member",
+            is_active=True,
+            is_staff=True,
+            approval_status="approved"
+        )
+
+        cls.pending_sara = User.objects.create_user(
+            email="sara@example.com",
+            password="Sara123!Test",
+            name="Sara"
+        )
+
+        cls.pending_lina = User.objects.create_user(
+            email="lina@example.com",
+            password="Lina123!Test",
+            name="Lina"
+        )
+
+        cls.rejected_user = User.objects.create_user(
+            email="rejected@example.com",
+            password="Rejected123!Test",
+            name="Rejected User",
+            approval_status="rejected"
+        )
+
+    def setUp(self):
+        self.client = Client(enforce_csrf_checks=True)
+
+    # 1. Administrator can access the endpoint
+
+    def test_admin_can_list_pending_registrations(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.get(self.pending_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsInstance(response.json(), list)
+
+    # 2. Only pending registrations are returned
+
+    def test_only_pending_users_are_returned(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.get(self.pending_url)
+
+        self.assertEqual(response.status_code, 200)
+
+        data = response.json()
+        received_ids = set()
+
+        index = 0
+        while index < len(data):
+            received_ids.add(data[index]["id"])
+            index += 1
+
+        expected_ids = {
+            self.pending_sara.id,
+            self.pending_lina.id
+        }
+
+        self.assertEqual(received_ids, expected_ids)
+
+    # 3. Response contains only permitted fields
+
+    def test_pending_list_excludes_sensitive_fields(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.get(self.pending_url)
+
+        self.assertEqual(response.status_code, 200)
+
+        data = response.json()
+
+        self.assertEqual(len(data), 2)
+
+        expected_fields = {
+            "id",
+            "name",
+            "email",
+            "approval_status"
+        }
+
+        index = 0
+        while index < len(data):
+            self.assertEqual(
+                set(data[index].keys()),
+                expected_fields
+            )
+            self.assertEqual(
+                data[index]["approval_status"],
+                "pending"
+            )
+            index += 1
+
+    # 4. Regular authenticated users cannot access
+
+    def test_regular_user_cannot_list_pending_registrations(self):
+        self.client.force_login(self.nurse)
+
+        response = self.client.get(self.pending_url)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["message"],
+            "Administrator access required."
+        )
+
+    # 5. is_staff alone does not grant administrator access
+
+    def test_staff_user_without_superuser_cannot_access(self):
+        self.client.force_login(self.staff_user)
+
+        response = self.client.get(self.pending_url)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["message"],
+            "Administrator access required."
+        )
+
+    # 6. Unauthenticated users cannot access
+
+    def test_unauthenticated_user_cannot_access(self):
+        response = self.client.get(self.pending_url)
+
+        self.assertIn(response.status_code, [401, 403])
+
+    # 7. Empty pending list returns an empty array
+
+    def test_empty_pending_registrations(self):
+        User = get_user_model()
+
+        User.objects.filter(
+            approval_status="pending"
+        ).delete()
+
+        self.client.force_login(self.admin)
+
+        response = self.client.get(self.pending_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])

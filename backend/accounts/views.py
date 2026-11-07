@@ -8,7 +8,8 @@ from django.middleware.csrf import get_token
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from .serializers import RegisterSerializer
+from .serializers import RegisterSerializer, PendingRegistrationSerializer
+from .models import User
 
 @method_decorator(csrf_protect, name="dispatch")
 class LoginView(APIView):
@@ -132,6 +133,26 @@ class RegisterView(APIView):
                 "id": user.id
             },
             status=status.HTTP_201_CREATED
+        )
+
+class PendingRegistrationsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if request.user.is_superuser is False:
+            return Response(
+                data={
+                    "message": "Administrator access required."
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        pending_users = User.objects.filter(approval_status="pending")
+        serializer = PendingRegistrationSerializer(pending_users, many=True)
+
+        return Response(
+            data=serializer.data,
+            status=status.HTTP_200_OK
         )
 
 @require_GET

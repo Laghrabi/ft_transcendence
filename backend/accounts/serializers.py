@@ -38,3 +38,8 @@ class RegisterSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(error.messages)
         
         return value
+
+class PendingRegistrationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["id", "name", "email", "approval_status"]
