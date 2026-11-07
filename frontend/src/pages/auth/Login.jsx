@@ -1,4 +1,5 @@
 import "../../styles/Login.css";
+import { useState } from "react";
 
 function LeftPanel() {
   return (
@@ -59,6 +60,19 @@ function LeftPanel() {
 }
 
 function RightPanel() {
+  //hook is a special fun react provides to giv components extra abilities
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  function handleSubmit(event) {
+    event.preventDefault();
+    // console.log("Login form submitted");
+    setError(
+      "Login is not available yet. Waiting for backend authentication."
+    );
+  }
   return (
     <section className="right-panel">
       <div className="right-content">
@@ -68,7 +82,7 @@ function RightPanel() {
           <p>Sign in with your hospital staff credentials.</p>
         </div>
 
-        <form className="login-form">
+        <form className="login-form" onSubmit={handleSubmit}>
           <div className="field">
             <label htmlFor="email">Hospital / Work Email</label>
             <input
@@ -78,7 +92,10 @@ function RightPanel() {
               placeholder="m.vance@hospital.careflow.org"
               autoComplete="email"
               required
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
             />
+            {/* <p style={{ color: "red", fontSize: "20px" }}>You are typing: {email}</p> */}
           </div>
 
           <div className="field">
@@ -90,13 +107,21 @@ function RightPanel() {
               placeholder="Enter your password"
               autoComplete="current-password"
               required
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
             />
+            {/* <p style={{ color: "red", fontSize: "20px" }}>You are typing: {password}</p> */}
           </div>
 
           <button className="sign-in-button" type="submit">
             Sign In to CareFlow <span aria-hidden="true">→</span>
           </button>
-        </form>
+          {error && (
+            <p className="login-error" role="alert">
+              {error}
+            </p>
+          )}        
+          </form>
 
         <p className="register-text">
           Don't have an account?{" "}
