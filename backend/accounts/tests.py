@@ -765,3 +765,804 @@ class PendingRegistrationsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), [])
+
+
+class ApproveRegistrationTests(TestCase):
+
+    @classmethod
+    def setUpTestData(cls):
+        User = get_user_model()
+
+        cls.admin = User.objects.create_superuser(
+            email="admin@example.com",
+            password="Admin123!Test",
+            name="Admin"
+        )
+
+        cls.nurse = User.objects.create_user(
+            email="nurse@example.com",
+            password="Nurse123!Test",
+            name="Nurse",
+            approval_status="approved",
+            is_active=True
+        )
+
+        cls.staff_user = User.objects.create_user(
+            email="staff@example.com",
+            password="Staff123!Test",
+            name="Staff Member",
+            approval_status="approved",
+            is_active=True,
+            is_staff=True
+        )
+
+        cls.pending_user = User.objects.create_user(
+            email="sara@example.com",
+            password="Sara123!Test",
+            name="Sara"
+        )
+
+        cls.approved_user = User.objects.create_user(
+            email="approved@example.com",
+            password="Approved123!Test",
+            name="Approved User",
+            approval_status="approved",
+            is_active=True
+        )
+
+        cls.rejected_user = User.objects.create_user(
+            email="rejected@example.com",
+            password="Rejected123!Test",
+            name="Rejected User",
+            approval_status="rejected",
+            is_active=False
+        )
+
+    def setUp(self):
+        self.client = Client(enforce_csrf_checks=True)
+
+    # Helpers
+
+    def approval_url(self, user_id):
+        return f"/api/auth/registrations/{user_id}/approve/"
+
+    def get_csrf_token(self):
+        response = self.client.get("/api/auth/csrf/")
+        self.assertEqual(response.status_code, 200)
+        return response.json()["csrf_token"]
+
+    def approve(self, user_id, include_csrf=True):
+        headers = {}
+
+        if include_csrf:
+            headers["HTTP_X_CSRFTOKEN"] = self.get_csrf_token()
+
+        return self.client.post(
+            self.approval_url(user_id),
+            **headers
+        )
+
+    # 1. Successful approval
+
+    def test_admin_can_approve_pending_registration(self):
+        self.client.force_login(self.admin)
+
+        response = self.approve(self.pending_user.id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["message"],
+            "Registration approved successfully."
+        )
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "approved"
+        )
+        self.assertTrue(self.pending_user.is_active)
+
+    # 2. Approved user can log in
+
+    def test_approved_user_can_login_after_approval(self):
+        self.client.force_login(self.admin)
+
+        response = self.approve(self.pending_user.id)
+        self.assertEqual(response.status_code, 200)
+
+        self.client.logout()
+
+        login_response = self.client.post(
+            "/api/auth/login/",
+            data=json.dumps({
+                "email": "sara@example.com",
+                "password": "Sara123!Test"
+            }),
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=self.get_csrf_token()
+        )
+
+        self.assertEqual(login_response.status_code, 200)
+
+    # 3. Regular user cannot approve
+
+    def test_regular_user_cannot_approve(self):
+        self.client.force_login(self.nurse)
+
+        response = self.approve(self.pending_user.id)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["message"],
+            "Administrator access required."
+        )
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "pending"
+        )
+        self.assertFalse(self.pending_user.is_active)
+
+    # 4. is_staff alone is not enough
+
+    def test_staff_user_cannot_approve(self):
+        self.client.force_login(self.staff_user)
+
+        response = self.approve(self.pending_user.id)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "pending"
+        )
+
+    # 5. Unauthenticated users cannot approve
+
+    def test_unauthenticated_user_cannot_approve(self):
+        response = self.approve(self.pending_user.id)
+
+        self.assertIn(response.status_code, [401, 403])
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "pending"
+        )
+        self.assertFalse(self.pending_user.is_active)
+
+    # 6. Nonexistent user returns 404
+
+    def test_approve_nonexistent_user(self):
+        self.client.force_login(self.admin)
+
+        response = self.approve(999999)
+
+        self.assertEqual(response.status_code, 404)
+
+    # 7. Already approved user returns 409
+
+    def test_cannot_approve_already_approved_user(self):
+        self.client.force_login(self.admin)
+
+        response = self.approve(self.approved_user.id)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.json()["message"],
+            "Only pending registrations can be approved."
+        )
+
+        self.approved_user.refresh_from_db()
+
+        self.assertEqual(
+            self.approved_user.approval_status,
+            "approved"
+        )
+
+    # 8. Rejected user cannot be approved
+
+    def test_cannot_approve_rejected_user(self):
+        self.client.force_login(self.admin)
+
+        response = self.approve(self.rejected_user.id)
+
+        self.assertEqual(response.status_code, 409)
+
+        self.rejected_user.refresh_from_db()
+
+        self.assertEqual(
+            self.rejected_user.approval_status,
+            "rejected"
+        )
+        self.assertFalse(self.rejected_user.is_active)
+
+    # 9. Approving twice returns 409
+
+    def test_cannot_approve_same_user_twice(self):
+        self.client.force_login(self.admin)
+
+        first_response = self.approve(self.pending_user.id)
+        second_response = self.approve(self.pending_user.id)
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(second_response.status_code, 409)
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "approved"
+        )
+        self.assertTrue(self.pending_user.is_active)
+
+    # 10. Missing CSRF token returns 403
+
+    def test_approval_requires_csrf(self):
+        self.client.force_login(self.admin)
+        self.get_csrf_token()
+
+        response = self.approve(
+            self.pending_user.id,
+            include_csrf=False
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "pending"
+        )
+
+    # 11. Invalid CSRF token returns 403
+
+    def test_invalid_csrf_token_is_rejected(self):
+        self.client.force_login(self.admin)
+        self.get_csrf_token()
+
+        response = self.client.post(
+            self.approval_url(self.pending_user.id),
+            HTTP_X_CSRFTOKEN="invalid-token"
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "pending"
+        )
+
+    # 12. GET requests are not allowed
+
+    def test_get_request_is_not_allowed(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.get(
+            self.approval_url(self.pending_user.id)
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+
+class RejectRegistrationTests(TestCase):
+
+    @classmethod
+    def setUpTestData(cls):
+        User = get_user_model()
+
+        cls.admin = User.objects.create_superuser(
+            email="admin@example.com",
+            password="Admin123!Test",
+            name="Admin"
+        )
+
+        cls.nurse = User.objects.create_user(
+            email="nurse@example.com",
+            password="Nurse123!Test",
+            name="Nurse",
+            approval_status="approved",
+            is_active=True
+        )
+
+        cls.staff_user = User.objects.create_user(
+            email="staff@example.com",
+            password="Staff123!Test",
+            name="Staff",
+            approval_status="approved",
+            is_active=True,
+            is_staff=True
+        )
+
+        cls.pending_user = User.objects.create_user(
+            email="pending@example.com",
+            password="Pending123!Test",
+            name="Pending User"
+        )
+
+        cls.approved_user = User.objects.create_user(
+            email="approved@example.com",
+            password="Approved123!Test",
+            name="Approved User",
+            approval_status="approved",
+            is_active=True
+        )
+
+        cls.rejected_user = User.objects.create_user(
+            email="rejected@example.com",
+            password="Rejected123!Test",
+            name="Rejected User",
+            approval_status="rejected",
+            is_active=False
+        )
+
+    def setUp(self):
+        self.client = Client(enforce_csrf_checks=True)
+
+    # Helpers
+
+    def rejection_url(self, user_id):
+        return f"/api/auth/registrations/{user_id}/reject/"
+
+    def get_csrf_token(self):
+        response = self.client.get("/api/auth/csrf/")
+        self.assertEqual(response.status_code, 200)
+        return response.json()["csrf_token"]
+
+    def reject(self, user_id, include_csrf=True):
+        headers = {}
+
+        if include_csrf:
+            headers["HTTP_X_CSRFTOKEN"] = self.get_csrf_token()
+
+        return self.client.post(
+            self.rejection_url(user_id),
+            **headers
+        )
+
+    # 1. Successful rejection
+
+    def test_admin_can_reject_pending_registration(self):
+        self.client.force_login(self.admin)
+
+        response = self.reject(self.pending_user.id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["message"],
+            "Registration rejected successfully."
+        )
+        self.assertEqual(
+            response.json()["id"],
+            self.pending_user.id
+        )
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "rejected"
+        )
+        self.assertFalse(self.pending_user.is_active)
+
+    # 2. Rejected user cannot log in
+
+    def test_rejected_user_cannot_login_after_rejection(self):
+        self.client.force_login(self.admin)
+
+        response = self.reject(self.pending_user.id)
+        self.assertEqual(response.status_code, 200)
+
+        self.client.logout()
+
+        login_response = self.client.post(
+            "/api/auth/login/",
+            data=json.dumps({
+                "email": "pending@example.com",
+                "password": "Pending123!Test"
+            }),
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=self.get_csrf_token()
+        )
+
+        self.assertEqual(login_response.status_code, 403)
+        self.assertEqual(
+            login_response.json()["error"],
+            "Your registration request was rejected."
+        )
+
+    # 3. Regular users cannot reject registrations
+
+    def test_regular_user_cannot_reject(self):
+        self.client.force_login(self.nurse)
+
+        response = self.reject(self.pending_user.id)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["message"],
+            "Administrator access required."
+        )
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "pending"
+        )
+        self.assertFalse(self.pending_user.is_active)
+
+    # 4. is_staff does not grant approval privileges
+
+    def test_staff_user_cannot_reject(self):
+        self.client.force_login(self.staff_user)
+
+        response = self.reject(self.pending_user.id)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "pending"
+        )
+
+    # 5. Unauthenticated users cannot reject
+
+    def test_unauthenticated_user_cannot_reject(self):
+        response = self.reject(self.pending_user.id)
+
+        self.assertIn(response.status_code, [401, 403])
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "pending"
+        )
+        self.assertFalse(self.pending_user.is_active)
+
+    # 6. Nonexistent user returns 404
+
+    def test_reject_nonexistent_user(self):
+        self.client.force_login(self.admin)
+
+        response = self.reject(999999)
+
+        self.assertEqual(response.status_code, 404)
+
+    # 7. Approved registration cannot be rejected
+
+    def test_cannot_reject_approved_user(self):
+        self.client.force_login(self.admin)
+
+        response = self.reject(self.approved_user.id)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.json()["message"],
+            "Only pending registrations can be rejected."
+        )
+
+        self.approved_user.refresh_from_db()
+
+        self.assertEqual(
+            self.approved_user.approval_status,
+            "approved"
+        )
+        self.assertTrue(self.approved_user.is_active)
+
+    # 8. Already rejected registration returns 409
+
+    def test_cannot_reject_already_rejected_user(self):
+        self.client.force_login(self.admin)
+
+        response = self.reject(self.rejected_user.id)
+
+        self.assertEqual(response.status_code, 409)
+
+        self.rejected_user.refresh_from_db()
+
+        self.assertEqual(
+            self.rejected_user.approval_status,
+            "rejected"
+        )
+        self.assertFalse(self.rejected_user.is_active)
+
+    # 9. Rejecting the same account twice
+
+    def test_cannot_reject_same_user_twice(self):
+        self.client.force_login(self.admin)
+
+        first_response = self.reject(self.pending_user.id)
+        second_response = self.reject(self.pending_user.id)
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(second_response.status_code, 409)
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "rejected"
+        )
+        self.assertFalse(self.pending_user.is_active)
+
+    # 10. CSRF token is required
+
+    def test_rejection_requires_csrf(self):
+        self.client.force_login(self.admin)
+        self.get_csrf_token()
+
+        response = self.reject(
+            self.pending_user.id,
+            include_csrf=False
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "pending"
+        )
+
+    # 11. Invalid CSRF token is rejected
+
+    def test_invalid_csrf_token_is_rejected(self):
+        self.client.force_login(self.admin)
+        self.get_csrf_token()
+
+        response = self.client.post(
+            self.rejection_url(self.pending_user.id),
+            HTTP_X_CSRFTOKEN="invalid-token"
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "pending"
+        )
+
+    # 12. GET requests are not allowed
+
+    def test_get_request_is_not_allowed(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.get(
+            self.rejection_url(self.pending_user.id)
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+    # 13. Rejected users disappear from pending list
+
+    def test_rejected_user_removed_from_pending_list(self):
+        self.client.force_login(self.admin)
+
+        rejection_response = self.reject(self.pending_user.id)
+        self.assertEqual(rejection_response.status_code, 200)
+
+        list_response = self.client.get(
+            "/api/auth/registrations/pending/"
+        )
+
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(list_response.json(), [])
+
+
+class ApprovedUserPermissionTests(TestCase):
+
+    @classmethod
+    def setUpTestData(cls):
+        User = get_user_model()
+
+        cls.admin = User.objects.create_superuser(
+            email="admin@example.com",
+            password="Admin123!Test",
+            name="Admin"
+        )
+
+        cls.nurse = User.objects.create_user(
+            email="nurse@example.com",
+            password="Nurse123!Test",
+            name="Sara",
+            is_active=True,
+            approval_status="approved"
+        )
+
+        cls.pending_user = User.objects.create_user(
+            email="pending@example.com",
+            password="Pending123!Test",
+            name="Pending User"
+        )
+
+    def setUp(self):
+        self.client = Client(enforce_csrf_checks=True)
+
+        self.me_url = "/api/auth/me/"
+        self.logout_url = "/api/auth/logout/"
+        self.pending_url = "/api/auth/registrations/pending/"
+
+        self.approve_url = (
+            f"/api/auth/registrations/{self.pending_user.id}/approve/"
+        )
+
+        self.reject_url = (
+            f"/api/auth/registrations/{self.pending_user.id}/reject/"
+        )
+
+    def get_csrf_token(self):
+        response = self.client.get("/api/auth/csrf/")
+        self.assertEqual(response.status_code, 200)
+        return response.json()["csrf_token"]
+
+    def protected_post(self, url):
+        token = self.get_csrf_token()
+
+        return self.client.post(
+            url,
+            HTTP_X_CSRFTOKEN=token
+        )
+
+    # 1. Approved users can access their profile
+
+    def test_approved_user_can_access_me(self):
+        self.client.force_login(self.nurse)
+
+        response = self.client.get(self.me_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["id"],
+            self.nurse.id
+        )
+
+    # 2. Anonymous users cannot access their profile
+
+    def test_anonymous_user_cannot_access_me(self):
+        response = self.client.get(self.me_url)
+
+        self.assertIn(response.status_code, [401, 403])
+
+    # 3. Pending approval blocks an existing session
+
+    def test_pending_user_with_existing_session_is_denied(self):
+        self.client.force_login(self.nurse)
+
+        first_response = self.client.get(self.me_url)
+        self.assertEqual(first_response.status_code, 200)
+
+        self.nurse.approval_status = "pending"
+        self.nurse.save(update_fields=["approval_status"])
+
+        second_response = self.client.get(self.me_url)
+
+        self.assertEqual(second_response.status_code, 403)
+
+    # 4. Rejected approval blocks an existing session
+
+    def test_rejected_user_with_existing_session_is_denied(self):
+        self.client.force_login(self.nurse)
+
+        first_response = self.client.get(self.me_url)
+        self.assertEqual(first_response.status_code, 200)
+
+        self.nurse.approval_status = "rejected"
+        self.nurse.save(update_fields=["approval_status"])
+
+        second_response = self.client.get(self.me_url)
+
+        self.assertEqual(second_response.status_code, 403)
+
+    # 5. Disabled accounts lose access
+
+    def test_inactive_user_with_existing_session_is_denied(self):
+        self.client.force_login(self.nurse)
+
+        first_response = self.client.get(self.me_url)
+        self.assertEqual(first_response.status_code, 200)
+
+        self.nurse.is_active = False
+        self.nurse.save(update_fields=["is_active"])
+
+        second_response = self.client.get(self.me_url)
+
+        self.assertIn(second_response.status_code, [401, 403])
+
+    # 6. Revoked superusers cannot list registrations
+
+    def test_revoked_admin_cannot_list_pending_registrations(self):
+        self.client.force_login(self.admin)
+
+        first_response = self.client.get(self.pending_url)
+        self.assertEqual(first_response.status_code, 200)
+
+        self.admin.approval_status = "rejected"
+        self.admin.save(update_fields=["approval_status"])
+
+        second_response = self.client.get(self.pending_url)
+
+        self.assertEqual(second_response.status_code, 403)
+
+    # 7. Revoked superusers cannot approve accounts
+
+    def test_revoked_admin_cannot_approve_registration(self):
+        self.client.force_login(self.admin)
+
+        self.admin.approval_status = "rejected"
+        self.admin.save(update_fields=["approval_status"])
+
+        response = self.protected_post(self.approve_url)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "pending"
+        )
+        self.assertFalse(self.pending_user.is_active)
+
+    # 8. Revoked superusers cannot reject accounts
+
+    def test_revoked_admin_cannot_reject_registration(self):
+        self.client.force_login(self.admin)
+
+        self.admin.approval_status = "rejected"
+        self.admin.save(update_fields=["approval_status"])
+
+        response = self.protected_post(self.reject_url)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "pending"
+        )
+        self.assertFalse(self.pending_user.is_active)
+
+    # 9. Inactive superusers cannot access admin endpoints
+
+    def test_inactive_admin_cannot_access_pending_registrations(self):
+        self.client.force_login(self.admin)
+
+        self.admin.is_active = False
+        self.admin.save(update_fields=["is_active"])
+
+        response = self.client.get(self.pending_url)
+
+        self.assertIn(response.status_code, [401, 403])
+
+    # 10. Revoked users can still log out
+
+    def test_revoked_user_can_still_logout(self):
+        self.client.force_login(self.nurse)
+
+        self.nurse.approval_status = "rejected"
+        self.nurse.save(update_fields=["approval_status"])
+
+        response = self.protected_post(self.logout_url)
+
+        self.assertEqual(response.status_code, 200)
+
+        me_response = self.client.get(self.me_url)
+
+        self.assertIn(me_response.status_code, [401, 403])

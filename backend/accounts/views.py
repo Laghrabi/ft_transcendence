@@ -10,6 +10,8 @@ from django.views.decorators.http import require_GET
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from .serializers import RegisterSerializer, PendingRegistrationSerializer
 from .models import User
+from django.shortcuts import get_object_or_404
+from .permissions import IsApprovedUser
 
 @method_decorator(csrf_protect, name="dispatch")
 class LoginView(APIView):
@@ -111,7 +113,7 @@ class LogoutView(APIView):
         )
 
 class MeView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsApprovedUser]
 
     def get(self, request):
         return Response(
@@ -136,7 +138,7 @@ class RegisterView(APIView):
         )
 
 class PendingRegistrationsView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsApprovedUser]
 
     def get(self, request):
         if request.user.is_superuser is False:
@@ -154,6 +156,77 @@ class PendingRegistrationsView(APIView):
             data=serializer.data,
             status=status.HTTP_200_OK
         )
+
+@method_decorator(csrf_protect, name="dispatch")
+class ApproveRegistrationView(APIView):
+    permission_classes = [IsApprovedUser]
+
+    def post(self, request, user_id):
+        if request.user.is_superuser is False:
+            return Response(
+                data={
+                    "message": "Administrator access required."
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        user = get_object_or_404(User, id=user_id)
+
+        if user.approval_status != "pending":
+            return Response(
+                data={
+                    "message": "Only pending registrations can be approved."
+                },
+                status=status.HTTP_409_CONFLICT
+            )
+        
+        user.approval_status = "approved"
+        user.is_active = True
+        user.save(update_fields=["approval_status", "is_active"])
+
+        return Response(
+            data={
+                "message": "Registration approved successfully."
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class RejectRegistrationView(APIView):
+    permission_classes = [IsApprovedUser]
+
+    def post(self, request, user_id):
+        if request.user.is_superuser is False:
+            return Response(
+                data={
+                    "message": "Administrator access required."
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        user = get_object_or_404(User, id=user_id)
+
+        if user.approval_status != "pending":
+            return Response(
+                data={
+                    "message": "Only pending registrations can be rejected."
+                },
+                status=status.HTTP_409_CONFLICT
+            )
+
+        user.approval_status = "rejected"
+        user.is_active = False
+        user.save(update_fields=["approval_status", "is_active"])
+
+        return Response(
+            data={
+                "message": "Registration rejected successfully.",
+                "id": user.id
+            },
+            status=status.HTTP_200_OK
+        )
+
 
 @require_GET
 def generate_token(request):
