@@ -10,7 +10,11 @@ from rest_framework.test import APITestCase
 from .models import Notification
 from django.test import TestCase
 from collaboration.services.notifications import create_notification
-
+from collaboration.services.events import handle_event
+from django.test import TestCase
+from django.contrib.auth.models import AnonymousUser
+from channels.testing import WebsocketCommunicator
+from collaboration.consumers import NotificationConsumer
 
 # class CommentAPITests(APITestCase):
 
@@ -362,18 +366,76 @@ from collaboration.services.notifications import create_notification
 
 
 
-class NotificationServiceTests(TestCase):
+# class NotificationServiceTests(TestCase):
 
+#     def test_create_notification(self):
+#         User = get_user_model()
+#         self.user = User.objects.create_user(
+#             username="salma",
+#             password="test_password_123!"
+#         )
+#         notification = create_notification(recipient= self.user, message="task from case 2")
+#         self.assertEqual(notification.recipient, self.user)
+#         self.assertFalse(notification.is_read)
+
+class EventHandlerTests(TestCase):
     def test_create_notification(self):
+        User = get_user_model()
+        user = User.objects.create_user(
+            username="salma",
+            password="test_password_123!"
+        )
+        with self.assertRaises(ValueError):
+            handle_event(event_type="gt", recipient=user, task_id=1)
+
+        self.assertEqual(Notification.objects.count(), 0)
+        notification = handle_event(event_type="case.completed", recipient= user, case_id=1)
+        self.assertEqual(notification.recipient, user)
+        self.assertEqual(Notification.objects.count(), 1)
+        self.assertIn("1", notification.message)
+        # self.assertIsNone(notification)
+
+
+
+
+
+class NotificationConsumerTests(TestCase):
+
+    async def test_anonymous_connection_rejected(self):
+        communicator = WebsocketCommunicator(NotificationConsumer.as_asgi(),"/ws/notifications/")
+
+        communicator.scope["user"] = AnonymousUser()
+
+        connected, _ = await communicator.connect()
+
+        self.assertFalse(connected)
+
+    def setUp(self):
         User = get_user_model()
         self.user = User.objects.create_user(
             username="salma",
             password="test_password_123!"
         )
-        notification = create_notification(recipient= self.user, message="task from case 2")
-        self.assertEqual(notification.recipient, self.user)
-        self.assertFalse(notification.is_read)
-        
+    async def test_anonymous_connection_accepted(self):
+        com = WebsocketCommunicator(NotificationConsumer.as_asgi(), "/ws/notifications/")
+        com.scope["user"] = self.user
+        ced, _ = await com.connect()
+        self.assertTrue(ced)
+        await com.disconnect()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # APITestCase	A DRF class for testing APIs
 # setUp()	Prepares fresh data before each test
 # self.client	A fake HTTP client used for testing
@@ -382,3 +444,12 @@ class NotificationServiceTests(TestCase):
 # assertIsNone(a)	Checks whether a value is None
 # reverse()	Finds a URL using its Django route name
 # refresh_from_db()	Reloads an object from the database
+
+
+
+
+
+
+
+
+
