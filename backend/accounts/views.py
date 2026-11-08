@@ -8,7 +8,7 @@ from django.middleware.csrf import get_token
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from .serializers import RegisterSerializer, PendingRegistrationSerializer
+from .serializers import RegisterSerializer, PendingRegistrationSerializer, UserProfileSerializer, UpdateProfileSerializer
 from .models import User
 from django.shortcuts import get_object_or_404
 from .permissions import IsApprovedUser
@@ -112,13 +112,35 @@ class LogoutView(APIView):
             status=status.HTTP_200_OK
         )
 
+@method_decorator(csrf_protect, name="dispatch")
 class MeView(APIView):
     permission_classes = [IsApprovedUser]
 
     def get(self, request):
-        return Response(
-            data={"id": request.user.id, "name": request.user.name, "email": request.user.email}
+        serializer = UserProfileSerializer(
+            request.user,
+            context={"request": request}
         )
+
+        return Response(serializer.data)
+
+    def patch(self, request):
+        serializer = UpdateProfileSerializer(
+            request.user,
+            data=request.data,
+            partial=True
+        )
+
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        profile_serializer = UserProfileSerializer(
+            request.user,
+            context={"request": request}
+        )
+
+        return Response(profile_serializer.data)
+
 
 @method_decorator(csrf_protect, name="dispatch")
 class RegisterView(APIView):
@@ -226,6 +248,25 @@ class RejectRegistrationView(APIView):
             },
             status=status.HTTP_200_OK
         )
+
+
+class StaffProfileView(APIView):
+    permission_classes = [IsApprovedUser]
+
+    def get(self, request, user_id):
+        user = get_object_or_404(
+            User,
+            id=user_id,
+            is_active=True,
+            approval_status="approved"
+        )
+
+        serializer = UserProfileSerializer(
+            user,
+            context={"request": request}
+        )
+
+        return Response(serializer.data)
 
 
 @require_GET

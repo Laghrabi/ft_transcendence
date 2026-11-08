@@ -3,8 +3,6 @@ from .models import User
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 
-
-
 class RegisterSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
@@ -43,3 +41,59 @@ class PendingRegistrationSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ["id", "name", "email", "approval_status"]
+
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "name",
+            "email",
+            "avatar",
+            "status",
+            "date_joined",
+            "phone_number",
+            "show_phone_number",
+        ]
+        read_only_fields = fields
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+
+        request = self.context.get("request")
+        viewer = request.user if request is not None else None
+
+        is_owner = (
+            viewer is not None
+            and viewer.is_authenticated
+            and viewer.pk == instance.pk
+        )
+
+        is_approved_staff = (
+            viewer is not None
+            and viewer.is_authenticated
+            and viewer.is_active
+            and viewer.approval_status == "approved"
+        )
+
+        if not is_owner:
+            data.pop("show_phone_number", None)
+
+        if not is_owner and not (
+            is_approved_staff and instance.show_phone_number
+        ):
+            data.pop("phone_number", None)
+
+        return data
+
+
+class UpdateProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = [
+            "name",
+            "avatar",
+            "phone_number",
+            "show_phone_number",
+        ]

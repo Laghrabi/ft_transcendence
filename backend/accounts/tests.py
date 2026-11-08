@@ -3,6 +3,10 @@ from django.contrib.auth import get_user_model
 from rest_framework import status
 from django.test import TestCase, Client, override_settings
 import json
+from types import SimpleNamespace
+from django.contrib.auth.models import AnonymousUser
+from .serializers import UserProfileSerializer
+from django.urls import reverse
 
 
 class AuthenticationTests(APITestCase):
@@ -1566,3 +1570,641 @@ class ApprovedUserPermissionTests(TestCase):
         me_response = self.client.get(self.me_url)
 
         self.assertIn(me_response.status_code, [401, 403])
+
+class UserProfileTests(APITestCase):
+
+    def setUp(self):
+        User = get_user_model()
+
+        self.owner = User.objects.create_user(
+            email="owner@example.com",
+            name="Profile Owner",
+            password="StrongTestPassword123!",
+            phone_number="+212612345678",
+            show_phone_number=False,
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.viewer = User.objects.create_user(
+            email="viewer@example.com",
+            name="Other Staff",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.url = "/api/auth/me/"
+
+    def serialize_profile(self, viewer):
+        request = SimpleNamespace(user=viewer)
+
+        serializer = UserProfileSerializer(
+            self.owner,
+            context={"request": request},
+        )
+
+        return serializer.data
+
+    def test_approved_user_can_get_own_profile(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["id"], self.owner.id)
+        self.assertEqual(response.data["name"], self.owner.name)
+        self.assertEqual(response.data["email"], self.owner.email)
+        self.assertEqual(response.data["status"], "offline")
+        self.assertIn("avatar", response.data)
+        self.assertIn("date_joined", response.data)
+
+    def test_owner_can_see_private_phone_number(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["phone_number"],
+            "+212612345678",
+        )
+        self.assertFalse(response.data["show_phone_number"])
+
+    def test_unauthenticated_user_cannot_get_profile(self):
+        response = self.client.get(self.url)
+
+        self.assertIn(response.status_code, [401, 403])
+
+    def test_pending_user_cannot_get_profile(self):
+        self.owner.approval_status = "pending"
+        self.owner.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_rejected_user_cannot_get_profile(self):
+        self.owner.approval_status = "rejected"
+        self.owner.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_inactive_user_cannot_get_profile(self):
+        self.owner.is_active = False
+        self.owner.save(update_fields=["is_active"])
+
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_other_staff_cannot_see_private_phone(self):
+        data = self.serialize_profile(self.viewer)
+
+        self.assertNotIn("phone_number", data)
+        self.assertNotIn("show_phone_number", data)
+        self.assertEqual(data["name"], self.owner.name)
+
+    def test_other_staff_can_see_public_phone(self):
+        self.owner.show_phone_number = True
+        self.owner.save(update_fields=["show_phone_number"])
+
+        data = self.serialize_profile(self.viewer)
+
+        self.assertEqual(
+            data["phone_number"],
+            "+212612345678",
+        )
+        self.assertNotIn("show_phone_number", data)
+
+    def test_pending_viewer_cannot_see_public_phone(self):
+        self.owner.show_phone_number = True
+        self.owner.save(update_fields=["show_phone_number"])
+
+        self.viewer.approval_status = "pending"
+        self.viewer.save(update_fields=["approval_status"])
+
+        data = self.serialize_profile(self.viewer)
+
+        self.assertNotIn("phone_number", data)
+        self.assertNotIn("show_phone_number", data)
+
+    def test_anonymous_viewer_cannot_see_public_phone(self):
+        self.owner.show_phone_number = True
+        self.owner.save(update_fields=["show_phone_number"])
+
+        data = self.serialize_profile(AnonymousUser())
+
+        self.assertNotIn("phone_number", data)
+        self.assertNotIn("show_phone_number", data)
+
+    def test_missing_request_hides_private_information(self):
+        serializer = UserProfileSerializer(self.owner)
+
+        data = serializer.data
+
+        self.assertNotIn("phone_number", data)
+        self.assertNotIn("show_phone_number", data)
+
+
+class UpdateProfileTests(APITestCase):
+
+    def setUp(self):
+        User = get_user_model()
+
+        self.user = User.objects.create_user(
+            email="owner@example.com",
+            name="Original Name",
+            password="StrongTestPassword123!",
+            avatar="https://example.com/old.png",
+            phone_number="+212612345678",
+            show_phone_number=False,
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.url = "/api/auth/me/"
+
+    def test_user_can_update_multiple_fields(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            self.url,
+            {
+                "name": "Updated Name",
+                "avatar": "https://example.com/new.png",
+                "phone_number": "+212698765432",
+                "show_phone_number": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.user.refresh_from_db()
+
+        self.assertEqual(self.user.name, "Updated Name")
+        self.assertEqual(
+            self.user.avatar,
+            "https://example.com/new.png",
+        )
+        self.assertEqual(
+            self.user.phone_number,
+            "+212698765432",
+        )
+        self.assertTrue(self.user.show_phone_number)
+
+        self.assertEqual(
+            response.data["name"],
+            "Updated Name",
+        )
+        self.assertTrue(
+            response.data["show_phone_number"]
+        )
+
+    def test_partial_update_preserves_other_fields(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "New Name"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.user.refresh_from_db()
+
+        self.assertEqual(self.user.name, "New Name")
+        self.assertEqual(
+            self.user.phone_number,
+            "+212612345678",
+        )
+        self.assertFalse(self.user.show_phone_number)
+        self.assertEqual(
+            self.user.avatar,
+            "https://example.com/old.png",
+        )
+
+    def test_user_can_remove_optional_phone_number(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            self.url,
+            {"phone_number": ""},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.user.refresh_from_db()
+
+        self.assertEqual(self.user.phone_number, "")
+
+    def test_user_can_change_phone_visibility(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            self.url,
+            {"show_phone_number": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.show_phone_number)
+
+        response = self.client.patch(
+            self.url,
+            {"show_phone_number": False},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.show_phone_number)
+
+    def test_empty_name_is_rejected(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            self.url,
+            {"name": ""},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("name", response.data)
+
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.name, "Original Name")
+
+    def test_phone_number_exceeding_max_length_is_rejected(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            self.url,
+            {"phone_number": "1" * 21},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("phone_number", response.data)
+
+        self.user.refresh_from_db()
+        self.assertEqual(
+            self.user.phone_number,
+            "+212612345678",
+        )
+
+    def test_invalid_phone_visibility_is_rejected(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            self.url,
+            {"show_phone_number": "invalid-value"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("show_phone_number", response.data)
+
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.show_phone_number)
+
+    def test_user_cannot_modify_protected_fields(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            self.url,
+            {
+                "email": "hacker@example.com",
+                "approval_status": "rejected",
+                "is_active": False,
+                "is_staff": True,
+                "is_superuser": True,
+                "status": "online",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.user.refresh_from_db()
+
+        self.assertEqual(
+            self.user.email,
+            "owner@example.com",
+        )
+        self.assertEqual(
+            self.user.approval_status,
+            "approved",
+        )
+        self.assertTrue(self.user.is_active)
+        self.assertFalse(self.user.is_staff)
+        self.assertFalse(self.user.is_superuser)
+        self.assertEqual(self.user.status, "offline")
+
+    def test_user_can_only_update_own_profile(self):
+        User = get_user_model()
+
+        other_user = User.objects.create_user(
+            email="other@example.com",
+            name="Other User",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            self.url,
+            {
+                "name": "Changed Name",
+                "id": other_user.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.user.refresh_from_db()
+        other_user.refresh_from_db()
+
+        self.assertEqual(self.user.name, "Changed Name")
+        self.assertEqual(other_user.name, "Other User")
+
+    def test_unauthenticated_user_cannot_update_profile(self):
+        response = self.client.patch(
+            self.url,
+            {"name": "Unauthorized Change"},
+            format="json",
+        )
+
+        self.assertIn(response.status_code, [401, 403])
+
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.name, "Original Name")
+
+    def test_pending_user_cannot_update_profile(self):
+        self.user.approval_status = "pending"
+        self.user.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Unauthorized Change"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.name, "Original Name")
+
+    def test_rejected_user_cannot_update_profile(self):
+        self.user.approval_status = "rejected"
+        self.user.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Unauthorized Change"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.name, "Original Name")
+
+    def test_inactive_user_cannot_update_profile(self):
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Unauthorized Change"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.name, "Original Name")
+
+    def test_patch_without_csrf_token_is_rejected(self):
+        client = APIClient(enforce_csrf_checks=True)
+        client.force_login(self.user)
+
+        response = client.patch(
+            self.url,
+            {"name": "Unauthorized Change"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.name, "Original Name")
+
+    def test_patch_with_valid_csrf_token_succeeds(self):
+        client = APIClient(enforce_csrf_checks=True)
+        client.force_login(self.user)
+
+        client.get("/api/auth/csrf/")
+
+        self.assertIn("csrftoken", client.cookies)
+
+        csrf_token = client.cookies["csrftoken"].value
+
+        response = client.patch(
+            self.url,
+            {"name": "CSRF Protected Update"},
+            format="json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.user.refresh_from_db()
+        self.assertEqual(
+            self.user.name,
+            "CSRF Protected Update",
+        )
+
+
+class StaffProfileTests(APITestCase):
+
+    def setUp(self):
+        User = get_user_model()
+
+        self.viewer = User.objects.create_user(
+            email="viewer@example.com",
+            name="Approved Viewer",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.target = User.objects.create_user(
+            email="target@example.com",
+            name="Target Staff",
+            password="StrongTestPassword123!",
+            phone_number="+212612345678",
+            show_phone_number=False,
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.url = reverse(
+            "staff-profile",
+            kwargs={"user_id": self.target.id},
+        )
+
+    def test_approved_staff_can_view_another_profile(self):
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["id"], self.target.id)
+        self.assertEqual(response.data["name"], self.target.name)
+        self.assertEqual(response.data["email"], self.target.email)
+        self.assertIn("avatar", response.data)
+        self.assertIn("status", response.data)
+        self.assertIn("date_joined", response.data)
+
+    def test_private_phone_is_hidden_from_other_staff(self):
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("phone_number", response.data)
+
+    def test_public_phone_is_visible_to_approved_staff(self):
+        self.target.show_phone_number = True
+        self.target.save(update_fields=["show_phone_number"])
+
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["phone_number"],
+            "+212612345678",
+        )
+
+    def test_phone_visibility_setting_is_hidden_from_other_staff(self):
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("show_phone_number", response.data)
+
+    def test_owner_can_view_own_private_phone(self):
+        self.client.force_authenticate(user=self.target)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["phone_number"],
+            "+212612345678",
+        )
+        self.assertFalse(response.data["show_phone_number"])
+
+    def test_nonexistent_staff_returns_404(self):
+        self.client.force_authenticate(user=self.viewer)
+
+        url = reverse(
+            "staff-profile",
+            kwargs={"user_id": 999999},
+        )
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_pending_staff_profile_is_not_accessible(self):
+        self.target.approval_status = "pending"
+        self.target.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_rejected_staff_profile_is_not_accessible(self):
+        self.target.approval_status = "rejected"
+        self.target.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_inactive_staff_profile_is_not_accessible(self):
+        self.target.is_active = False
+        self.target.save(update_fields=["is_active"])
+
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_unauthenticated_user_cannot_view_staff_profile(self):
+        response = self.client.get(self.url)
+
+        self.assertIn(response.status_code, [401, 403])
+
+    def test_pending_user_cannot_view_staff_profile(self):
+        self.viewer.approval_status = "pending"
+        self.viewer.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_rejected_user_cannot_view_staff_profile(self):
+        self.viewer.approval_status = "rejected"
+        self.viewer.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_inactive_user_cannot_view_staff_profile(self):
+        self.viewer.is_active = False
+        self.viewer.save(update_fields=["is_active"])
+
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)

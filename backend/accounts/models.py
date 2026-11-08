@@ -16,6 +16,8 @@ class User(AbstractUser):
     avatar = models.CharField(max_length=500, null=True, blank=True)
     status = models.CharField(max_length=20, default="offline")
     approval_status = models.CharField(max_length=10, choices=APPROVAL_CHOICES, default="pending")
+    phone_number = models.CharField(max_length=20, blank=True, default="")
+    show_phone_number = models.BooleanField(default=False)
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = ["name"]

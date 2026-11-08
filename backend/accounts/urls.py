@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import LoginView, generate_token, MeView, LogoutView, RegisterView
-from .views import PendingRegistrationsView, ApproveRegistrationView, RejectRegistrationView
+from .views import PendingRegistrationsView, ApproveRegistrationView, RejectRegistrationView, StaffProfileView
 
 urlpatterns = [
     path("login/", LoginView.as_view(), name="login"),
@@ -23,4 +23,5 @@ urlpatterns = [
         RejectRegistrationView.as_view(),
         name="reject-registration"
     ),
+    path("users/<int:user_id>/", StaffProfileView.as_view(), name="staff-profile"),
 ]
