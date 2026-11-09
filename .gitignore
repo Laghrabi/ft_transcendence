@@ -3,8 +3,8 @@
 .env.local
 *.key
 *.pem
-nginx/ssl/*.crt
-nginx/ssl/*.key
+infra/nginx/ssl/*.crt
+infra/nginx/ssl/*.key
 
 # Python / Django
 __pycache__/
