@@ -12,7 +12,7 @@ from .serializers import RegisterSerializer, PendingRegistrationSerializer, User
 from .models import User
 from django.shortcuts import get_object_or_404
 from .permissions import IsApprovedUser
-from .serializers import StaffListSerializer, AdminStaffUpdateSerializer
+from .serializers import StaffListSerializer, AdminStaffUpdateSerializer, AdminStaffListSerializer
 
 @method_decorator(csrf_protect, name="dispatch")
 class LoginView(APIView):
@@ -280,24 +280,29 @@ class StaffProfileView(APIView):
 
 class StaffListView(APIView):
     """
-    List all active, approved staff members.
-    
-    Access is restricted to approved users. Staff information
-    is serialized using StaffListSerializer.
+    List approved staff members based on the requesting user's privileges.
+
+    Regular approved users can view only active, approved staff members.
+    Administrators can view all approved staff members, including
+    deactivated accounts, with additional account status information.
     """
-    
+
     permission_classes = [IsApprovedUser]
 
     def get(self, request):
-      """Return a list of all active, approved staff members."""
-      
-      users = User.objects.filter(is_active=True, approval_status="approved")
-      serializer = StaffListSerializer(users, many=True)
+        """Return the appropriate staff list based on the user's privileges."""
+        
+        if request.user.is_superuser is False:
+            users = User.objects.filter(is_active=True, approval_status="approved")
+            serializer = StaffListSerializer(users, many=True)
+        else:
+            users = User.objects.filter(approval_status="approved")
+            serializer = AdminStaffListSerializer(users, many=True)
 
-      return Response(
-          serializer.data,
-          status=status.HTTP_200_OK
-      )
+        return Response(
+            serializer.data,
+            status=status.HTTP_200_OK
+        )
 
 @method_decorator(csrf_protect, name="dispatch")
 class AdminStaffUpdateView(APIView):
@@ -382,7 +387,7 @@ class ActivateStaffView(APIView):
 
     def post(self, request, user_id):
         """Activate an approved staff account by setting is_active to True."""
-        
+
         if request.user.is_superuser is False:
             return Response(
                 data={

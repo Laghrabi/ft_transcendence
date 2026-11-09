@@ -2400,6 +2400,113 @@ class StaffListTests(APITestCase):
 
         self.assertEqual(response.status_code, 405)
 
+    
+    def test_admin_can_see_active_and_inactive_staff(self):
+        User = get_user_model()
+
+        admin = User.objects.create_superuser(
+            email="admin@example.com",
+            name="Hospital Admin",
+            password="StrongTestPassword123!",
+        )
+
+        self.client.force_authenticate(user=admin)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 4)
+
+        self.assertIsNotNone(
+            self.find_user(response.data, admin.id)
+        )
+        self.assertIsNotNone(
+            self.find_user(response.data, self.viewer.id)
+        )
+        self.assertIsNotNone(
+            self.find_user(response.data, self.approved_staff.id)
+        )
+        self.assertIsNotNone(
+            self.find_user(response.data, self.inactive_staff.id)
+        )
+
+        self.assertIsNone(
+            self.find_user(response.data, self.pending_staff.id)
+        )
+        self.assertIsNone(
+            self.find_user(response.data, self.rejected_staff.id)
+        )
+
+    def test_admin_receives_account_activation_status(self):
+        User = get_user_model()
+
+        admin = User.objects.create_superuser(
+            email="admin@example.com",
+            name="Hospital Admin",
+            password="StrongTestPassword123!",
+        )
+
+        self.client.force_authenticate(user=admin)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+        active_staff = self.find_user(
+            response.data,
+            self.approved_staff.id,
+        )
+        inactive_staff = self.find_user(
+            response.data,
+            self.inactive_staff.id,
+        )
+
+        self.assertIsNotNone(active_staff)
+        self.assertIsNotNone(inactive_staff)
+
+        self.assertTrue(active_staff["is_active"])
+        self.assertFalse(inactive_staff["is_active"])
+
+        self.assertEqual(
+            set(active_staff.keys()),
+            {
+                "id",
+                "name",
+                "email",
+                "avatar",
+                "status",
+                "is_active",
+            },
+        )
+
+    def test_admin_directory_does_not_expose_private_fields(self):
+        User = get_user_model()
+
+        admin = User.objects.create_superuser(
+            email="admin@example.com",
+            name="Hospital Admin",
+            password="StrongTestPassword123!",
+        )
+
+        self.client.force_authenticate(user=admin)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+        staff = self.find_user(
+            response.data,
+            self.approved_staff.id,
+        )
+
+        self.assertIsNotNone(staff)
+        self.assertNotIn("phone_number", staff)
+        self.assertNotIn("show_phone_number", staff)
+        self.assertNotIn("password", staff)
+        self.assertNotIn("is_superuser", staff)
+        self.assertNotIn("approval_status", staff)
+
+
 
 class AdminStaffUpdateTests(APITestCase):
 

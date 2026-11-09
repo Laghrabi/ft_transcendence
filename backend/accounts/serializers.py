@@ -117,6 +117,20 @@ class StaffListSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+class AdminStaffListSerializer(serializers.ModelSerializer):
+    
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "name",
+            "email",
+            "avatar",
+            "status",
+            "is_active",
+        ]
+        read_only_fields = fields
+
 class AdminStaffUpdateSerializer(serializers.ModelSerializer):
     """
     Serialize and validate staff information updates.
