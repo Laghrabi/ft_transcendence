@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import LoginView, generate_token, MeView, LogoutView, RegisterView
 from .views import PendingRegistrationsView, ApproveRegistrationView, RejectRegistrationView, StaffProfileView
+from .views import StaffListView, AdminStaffUpdateView, DeactivateStaffView, ActivateStaffView
 
 urlpatterns = [
     path("login/", LoginView.as_view(), name="login"),
@@ -24,4 +25,8 @@ urlpatterns = [
         name="reject-registration"
     ),
     path("users/<int:user_id>/", StaffProfileView.as_view(), name="staff-profile"),
+    path("users/", StaffListView.as_view(), name="staff-list"),
+    path("admin/users/<int:user_id>/", AdminStaffUpdateView.as_view(), name="admin-staff-update"),
+    path("admin/users/<int:user_id>/deactivate/", DeactivateStaffView.as_view(), name="admin-staff-deactivate"),
+    path("admin/users/<int:user_id>/activate/", ActivateStaffView.as_view(), name="admin-staff-activate"),
 ]

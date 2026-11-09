@@ -12,6 +12,7 @@ from .serializers import RegisterSerializer, PendingRegistrationSerializer, User
 from .models import User
 from django.shortcuts import get_object_or_404
 from .permissions import IsApprovedUser
+from .serializers import StaffListSerializer, AdminStaffUpdateSerializer
 
 @method_decorator(csrf_protect, name="dispatch")
 class LoginView(APIView):
@@ -251,9 +252,18 @@ class RejectRegistrationView(APIView):
 
 
 class StaffProfileView(APIView):
+    """
+    Retrieve the profile of an active, approved staff member.
+
+    Access is restricted to approved users. Phone number
+    visibility is controlled by UserProfileSerializer.
+    """
+    
     permission_classes = [IsApprovedUser]
 
     def get(self, request, user_id):
+        """Return the profile of the staff member with the given ID."""
+
         user = get_object_or_404(
             User,
             id=user_id,
@@ -268,6 +278,129 @@ class StaffProfileView(APIView):
 
         return Response(serializer.data)
 
+class StaffListView(APIView):
+    """
+    List all active, approved staff members.
+    
+    Access is restricted to approved users. Staff information
+    is serialized using StaffListSerializer.
+    """
+    
+    permission_classes = [IsApprovedUser]
+
+    def get(self, request):
+      """Return a list of all active, approved staff members."""
+      
+      users = User.objects.filter(is_active=True, approval_status="approved")
+      serializer = StaffListSerializer(users, many=True)
+
+      return Response(
+          serializer.data,
+          status=status.HTTP_200_OK
+      )
+
+@method_decorator(csrf_protect, name="dispatch")
+class AdminStaffUpdateView(APIView):
+    """
+    Allow administrators to update approved staff members' information.
+
+    Access is restricted to authenticated, approved users with
+    superuser privileges. Supports partial updates using PATCH.
+    """
+
+    permission_classes = [IsApprovedUser]
+
+    def patch(self, request, user_id):
+        """Validate and update the name or email of an approved staff member."""
+
+        if request.user.is_superuser is False:
+            return Response(
+                data={
+                    "message": "Administrator access required."
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+        user = get_object_or_404(User, id=user_id, approval_status="approved")
+        serializer = AdminStaffUpdateSerializer(user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+@method_decorator(csrf_protect, name="dispatch")
+class DeactivateStaffView(APIView):
+    """
+    Allow administrators to deactivate approved staff accounts.
+
+    Access is restricted to authenticated, approved users with
+    superuser privileges. Prevents self-deactivation and returns
+    an error if the target account is already inactive.
+    """
+
+    permission_classes = [IsApprovedUser]
+
+    def post(self, request, user_id):
+        """Deactivate an approved staff account by setting is_active to False."""
+
+        if request.user.is_superuser is False:
+            return Response(
+                data={
+                        "message": "Administrator access required."
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        if request.user.id == user_id:
+            return Response(
+                data={
+                     "message": "You cannot deactivate your own account."
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+        user = get_object_or_404(User, id=user_id, approval_status="approved")
+        if user.is_active is False:
+            return Response(
+                data= {"message": "This account is already deactivated."},
+                status=status.HTTP_409_CONFLICT
+            )
+        user.is_active = False
+        user.save(update_fields=["is_active"])
+
+        return Response(
+            data={"message": "Staff account deactivated successfully."}, status=status.HTTP_200_OK)
+
+@method_decorator(csrf_protect, name="dispatch")
+class ActivateStaffView(APIView):
+    """
+    Allow administrators to activate approved staff accounts.
+
+    Access is restricted to authenticated, approved users with
+    superuser privileges. Returns an error if the target account
+    is already active.
+    """
+
+    permission_classes = [IsApprovedUser]
+
+    def post(self, request, user_id):
+        """Activate an approved staff account by setting is_active to True."""
+        
+        if request.user.is_superuser is False:
+            return Response(
+                data={
+                        "message": "Administrator access required."
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        user = get_object_or_404(User, id=user_id, approval_status="approved")
+        if user.is_active is True:
+            return Response(
+                data= {"message": "This account is already activated."},
+                status=status.HTTP_409_CONFLICT
+            )
+        user.is_active = True
+        user.save(update_fields=["is_active"])
+
+        return Response(
+            data={"message": "Staff account activated successfully."}, status=status.HTTP_200_OK)
 
 @require_GET
 def generate_token(request):

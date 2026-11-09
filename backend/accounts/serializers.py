@@ -97,3 +97,36 @@ class UpdateProfileSerializer(serializers.ModelSerializer):
             "phone_number",
             "show_phone_number",
         ]
+
+class StaffListSerializer(serializers.ModelSerializer):
+    """
+    Serialize basic information of staff members for the staff directory.
+
+    Includes identification, contact, avatar, and status information.
+    All fields are read-only.
+    """
+    
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "name",
+            "email",
+            "avatar",
+            "status",
+        ]
+        read_only_fields = fields
+
+class AdminStaffUpdateSerializer(serializers.ModelSerializer):
+    """
+    Serialize and validate staff information updates.
+
+    Allows updating a staff member's name and email address.
+    """
+    
+    class Meta:
+        model = User
+        fields = [
+			"name",
+			"email",
+		]

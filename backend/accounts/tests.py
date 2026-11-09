@@ -2208,3 +2208,1134 @@ class StaffProfileTests(APITestCase):
         response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, 403)
+
+
+class StaffListTests(APITestCase):
+
+    def setUp(self):
+        User = get_user_model()
+
+        self.viewer = User.objects.create_user(
+            email="viewer@example.com",
+            name="Approved Viewer",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.approved_staff = User.objects.create_user(
+            email="staff@example.com",
+            name="Approved Staff",
+            password="StrongTestPassword123!",
+            phone_number="+212612345678",
+            show_phone_number=True,
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.pending_staff = User.objects.create_user(
+            email="pending@example.com",
+            name="Pending Staff",
+            password="StrongTestPassword123!",
+            approval_status="pending",
+            is_active=True,
+        )
+
+        self.rejected_staff = User.objects.create_user(
+            email="rejected@example.com",
+            name="Rejected Staff",
+            password="StrongTestPassword123!",
+            approval_status="rejected",
+            is_active=True,
+        )
+
+        self.inactive_staff = User.objects.create_user(
+            email="inactive@example.com",
+            name="Inactive Staff",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=False,
+        )
+
+        self.url = reverse("staff-list")
+
+    def find_user(self, data, user_id):
+        index = 0
+
+        while index < len(data):
+            if data[index]["id"] == user_id:
+                return data[index]
+            index += 1
+
+        return None
+
+    def test_approved_user_can_get_staff_directory(self):
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsInstance(response.data, list)
+
+    def test_directory_contains_only_active_approved_staff(self):
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 2)
+
+        self.assertIsNotNone(
+            self.find_user(response.data, self.viewer.id)
+        )
+        self.assertIsNotNone(
+            self.find_user(response.data, self.approved_staff.id)
+        )
+
+        self.assertIsNone(
+            self.find_user(response.data, self.pending_staff.id)
+        )
+        self.assertIsNone(
+            self.find_user(response.data, self.rejected_staff.id)
+        )
+        self.assertIsNone(
+            self.find_user(response.data, self.inactive_staff.id)
+        )
+
+    def test_directory_returns_correct_fields(self):
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+        staff = self.find_user(
+            response.data,
+            self.approved_staff.id,
+        )
+
+        self.assertIsNotNone(staff)
+        self.assertEqual(
+            set(staff.keys()),
+            {"id", "name", "email", "avatar", "status"},
+        )
+
+        self.assertEqual(
+            staff["name"],
+            self.approved_staff.name,
+        )
+        self.assertEqual(
+            staff["email"],
+            self.approved_staff.email,
+        )
+
+    def test_directory_does_not_expose_phone_numbers(self):
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+        staff = self.find_user(
+            response.data,
+            self.approved_staff.id,
+        )
+
+        self.assertIsNotNone(staff)
+        self.assertNotIn("phone_number", staff)
+        self.assertNotIn("show_phone_number", staff)
+
+    def test_directory_does_not_expose_sensitive_fields(self):
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+        staff = self.find_user(
+            response.data,
+            self.approved_staff.id,
+        )
+
+        self.assertNotIn("password", staff)
+        self.assertNotIn("is_staff", staff)
+        self.assertNotIn("is_superuser", staff)
+        self.assertNotIn("is_active", staff)
+        self.assertNotIn("approval_status", staff)
+
+    def test_unauthenticated_user_cannot_access_directory(self):
+        response = self.client.get(self.url)
+
+        self.assertIn(response.status_code, [401, 403])
+
+    def test_pending_user_cannot_access_directory(self):
+        self.client.force_authenticate(user=self.pending_staff)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_rejected_user_cannot_access_directory(self):
+        self.client.force_authenticate(user=self.rejected_staff)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_inactive_user_cannot_access_directory(self):
+        self.client.force_authenticate(user=self.inactive_staff)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_post_method_is_not_allowed(self):
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.post(
+            self.url,
+            {"name": "New Staff"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+
+class AdminStaffUpdateTests(APITestCase):
+
+    def setUp(self):
+        User = get_user_model()
+
+        self.admin = User.objects.create_superuser(
+            email="admin@example.com",
+            name="Hospital Admin",
+            password="StrongTestPassword123!",
+        )
+
+        self.staff = User.objects.create_user(
+            email="staff@example.com",
+            name="Original Staff",
+            password="StrongTestPassword123!",
+            phone_number="+212612345678",
+            show_phone_number=False,
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.regular_user = User.objects.create_user(
+            email="regular@example.com",
+            name="Regular Staff",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.inactive_staff = User.objects.create_user(
+            email="inactive@example.com",
+            name="Inactive Staff",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=False,
+        )
+
+        self.url = reverse(
+            "admin-staff-update",
+            kwargs={"user_id": self.staff.id},
+        )
+
+    def test_admin_can_update_name_and_email(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {
+                "name": "Updated Staff",
+                "email": "updated@example.com",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.staff.refresh_from_db()
+
+        self.assertEqual(self.staff.name, "Updated Staff")
+        self.assertEqual(self.staff.email, "updated@example.com")
+        self.assertEqual(response.data["name"], "Updated Staff")
+        self.assertEqual(response.data["email"], "updated@example.com")
+
+    def test_partial_update_preserves_email(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "New Name"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.staff.refresh_from_db()
+
+        self.assertEqual(self.staff.name, "New Name")
+        self.assertEqual(self.staff.email, "staff@example.com")
+
+    def test_admin_can_update_inactive_approved_staff(self):
+        self.client.force_authenticate(user=self.admin)
+
+        url = reverse(
+            "admin-staff-update",
+            kwargs={"user_id": self.inactive_staff.id},
+        )
+
+        response = self.client.patch(
+            url,
+            {"name": "Corrected Name"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.inactive_staff.refresh_from_db()
+
+        self.assertEqual(self.inactive_staff.name, "Corrected Name")
+        self.assertFalse(self.inactive_staff.is_active)
+
+    def test_pending_target_returns_404(self):
+        self.staff.approval_status = "pending"
+        self.staff.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Changed"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+        self.staff.refresh_from_db()
+        self.assertEqual(self.staff.name, "Original Staff")
+
+    def test_rejected_target_returns_404(self):
+        self.staff.approval_status = "rejected"
+        self.staff.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Changed"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+        self.staff.refresh_from_db()
+        self.assertEqual(self.staff.name, "Original Staff")
+
+    def test_nonexistent_target_returns_404(self):
+        self.client.force_authenticate(user=self.admin)
+
+        url = reverse(
+            "admin-staff-update",
+            kwargs={"user_id": 999999},
+        )
+
+        response = self.client.patch(
+            url,
+            {"name": "Changed"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_regular_user_cannot_update_staff(self):
+        self.client.force_authenticate(user=self.regular_user)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Unauthorized Change"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.staff.refresh_from_db()
+        self.assertEqual(self.staff.name, "Original Staff")
+
+    def test_unauthenticated_user_cannot_update_staff(self):
+        response = self.client.patch(
+            self.url,
+            {"name": "Unauthorized Change"},
+            format="json",
+        )
+
+        self.assertIn(response.status_code, [401, 403])
+
+        self.staff.refresh_from_db()
+        self.assertEqual(self.staff.name, "Original Staff")
+
+    def test_pending_admin_cannot_update_staff(self):
+        self.admin.approval_status = "pending"
+        self.admin.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Unauthorized Change"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.staff.refresh_from_db()
+        self.assertEqual(self.staff.name, "Original Staff")
+
+    def test_rejected_admin_cannot_update_staff(self):
+        self.admin.approval_status = "rejected"
+        self.admin.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Unauthorized Change"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.staff.refresh_from_db()
+        self.assertEqual(self.staff.name, "Original Staff")
+
+    def test_inactive_admin_cannot_update_staff(self):
+        self.admin.is_active = False
+        self.admin.save(update_fields=["is_active"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Unauthorized Change"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.staff.refresh_from_db()
+        self.assertEqual(self.staff.name, "Original Staff")
+
+    def test_duplicate_email_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"email": "regular@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("email", response.data)
+
+        self.staff.refresh_from_db()
+        self.assertEqual(self.staff.email, "staff@example.com")
+
+    def test_invalid_email_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"email": "invalid-email"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("email", response.data)
+
+        self.staff.refresh_from_db()
+        self.assertEqual(self.staff.email, "staff@example.com")
+
+    def test_empty_name_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": ""},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("name", response.data)
+
+        self.staff.refresh_from_db()
+        self.assertEqual(self.staff.name, "Original Staff")
+
+    def test_empty_email_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"email": ""},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("email", response.data)
+
+        self.staff.refresh_from_db()
+        self.assertEqual(self.staff.email, "staff@example.com")
+
+    def test_admin_cannot_modify_protected_fields(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {
+                "name": "Updated Name",
+                "is_superuser": True,
+                "is_staff": True,
+                "is_active": False,
+                "approval_status": "rejected",
+                "phone_number": "+212699999999",
+                "show_phone_number": True,
+                "status": "online",
+                "password": "HackedPassword123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.staff.refresh_from_db()
+
+        self.assertEqual(self.staff.name, "Updated Name")
+        self.assertFalse(self.staff.is_superuser)
+        self.assertFalse(self.staff.is_staff)
+        self.assertTrue(self.staff.is_active)
+        self.assertEqual(self.staff.approval_status, "approved")
+        self.assertEqual(self.staff.phone_number, "+212612345678")
+        self.assertFalse(self.staff.show_phone_number)
+        self.assertEqual(self.staff.status, "offline")
+        self.assertTrue(
+            self.staff.check_password("StrongTestPassword123!")
+        )
+
+    def test_response_contains_only_allowed_fields(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Updated Name"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            set(response.data.keys()),
+            {"name", "email"},
+        )
+
+    def test_post_method_is_not_allowed(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(
+            self.url,
+            {"name": "Changed"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_patch_without_csrf_token_is_rejected(self):
+        client = APIClient(enforce_csrf_checks=True)
+        client.force_login(self.admin)
+
+        response = client.patch(
+            self.url,
+            {"name": "Unauthorized Change"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.staff.refresh_from_db()
+        self.assertEqual(self.staff.name, "Original Staff")
+
+    def test_patch_with_valid_csrf_token_succeeds(self):
+        client = APIClient(enforce_csrf_checks=True)
+        client.force_login(self.admin)
+
+        client.get("/api/auth/csrf/")
+
+        self.assertIn("csrftoken", client.cookies)
+
+        csrf_token = client.cookies["csrftoken"].value
+
+        response = client.patch(
+            self.url,
+            {"name": "CSRF Protected Update"},
+            format="json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.staff.refresh_from_db()
+        self.assertEqual(
+            self.staff.name,
+            "CSRF Protected Update",
+        )
+
+
+class DeactivateStaffTests(APITestCase):
+
+    def setUp(self):
+        User = get_user_model()
+
+        self.admin = User.objects.create_superuser(
+            email="admin@example.com",
+            name="Hospital Admin",
+            password="StrongTestPassword123!",
+        )
+
+        self.staff = User.objects.create_user(
+            email="staff@example.com",
+            name="Approved Staff",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.regular_user = User.objects.create_user(
+            email="regular@example.com",
+            name="Regular Staff",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.url = reverse(
+            "admin-staff-deactivate",
+            kwargs={"user_id": self.staff.id},
+        )
+
+    def test_admin_can_deactivate_approved_staff(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data,
+            {"message": "Staff account deactivated successfully."},
+        )
+
+        self.staff.refresh_from_db()
+
+        self.assertFalse(self.staff.is_active)
+        self.assertEqual(
+            self.staff.approval_status,
+            "approved",
+        )
+
+    def test_deactivating_twice_returns_409(self):
+        self.client.force_authenticate(user=self.admin)
+
+        first_response = self.client.post(self.url)
+        second_response = self.client.post(self.url)
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(second_response.status_code, 409)
+        self.assertEqual(
+            second_response.data["message"],
+            "This account is already deactivated.",
+        )
+
+    def test_deactivated_staff_loses_access(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 200)
+
+        self.staff.refresh_from_db()
+        self.client.force_authenticate(user=self.staff)
+
+        response = self.client.get(reverse("me"))
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_regular_user_cannot_deactivate_staff(self):
+        self.client.force_authenticate(user=self.regular_user)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.staff.refresh_from_db()
+        self.assertTrue(self.staff.is_active)
+
+    def test_unauthenticated_user_cannot_deactivate_staff(self):
+        response = self.client.post(self.url)
+
+        self.assertIn(response.status_code, [401, 403])
+
+        self.staff.refresh_from_db()
+        self.assertTrue(self.staff.is_active)
+
+    def test_pending_admin_cannot_deactivate_staff(self):
+        self.admin.approval_status = "pending"
+        self.admin.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.staff.refresh_from_db()
+        self.assertTrue(self.staff.is_active)
+
+    def test_rejected_admin_cannot_deactivate_staff(self):
+        self.admin.approval_status = "rejected"
+        self.admin.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.staff.refresh_from_db()
+        self.assertTrue(self.staff.is_active)
+
+    def test_inactive_admin_cannot_deactivate_staff(self):
+        self.admin.is_active = False
+        self.admin.save(update_fields=["is_active"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.staff.refresh_from_db()
+        self.assertTrue(self.staff.is_active)
+
+    def test_admin_cannot_deactivate_own_account(self):
+        self.client.force_authenticate(user=self.admin)
+
+        url = reverse(
+            "admin-staff-deactivate",
+            kwargs={"user_id": self.admin.id},
+        )
+
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.data["message"],
+            "You cannot deactivate your own account.",
+        )
+
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.is_active)
+
+    def test_pending_target_returns_404(self):
+        self.staff.approval_status = "pending"
+        self.staff.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 404)
+
+        self.staff.refresh_from_db()
+        self.assertTrue(self.staff.is_active)
+
+    def test_rejected_target_returns_404(self):
+        self.staff.approval_status = "rejected"
+        self.staff.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 404)
+
+        self.staff.refresh_from_db()
+        self.assertTrue(self.staff.is_active)
+
+    def test_nonexistent_target_returns_404(self):
+        self.client.force_authenticate(user=self.admin)
+
+        url = reverse(
+            "admin-staff-deactivate",
+            kwargs={"user_id": 999999},
+        )
+
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_already_inactive_staff_returns_409(self):
+        self.staff.is_active = False
+        self.staff.save(update_fields=["is_active"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 409)
+
+        self.staff.refresh_from_db()
+        self.assertFalse(self.staff.is_active)
+        self.assertEqual(
+            self.staff.approval_status,
+            "approved",
+        )
+
+    def test_get_method_is_not_allowed(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_patch_method_is_not_allowed(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"is_active": False},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+        self.staff.refresh_from_db()
+        self.assertTrue(self.staff.is_active)
+
+    def test_post_without_csrf_token_is_rejected(self):
+        client = APIClient(enforce_csrf_checks=True)
+        client.force_login(self.admin)
+
+        response = client.post(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.staff.refresh_from_db()
+        self.assertTrue(self.staff.is_active)
+
+    def test_post_with_valid_csrf_token_succeeds(self):
+        client = APIClient(enforce_csrf_checks=True)
+        client.force_login(self.admin)
+
+        client.get(reverse("csrf"))
+
+        self.assertIn("csrftoken", client.cookies)
+
+        csrf_token = client.cookies["csrftoken"].value
+
+        response = client.post(
+            self.url,
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.staff.refresh_from_db()
+
+        self.assertFalse(self.staff.is_active)
+        self.assertEqual(
+            self.staff.approval_status,
+            "approved",
+        )
+
+
+class ActivateStaffTests(APITestCase):
+
+    def setUp(self):
+        User = get_user_model()
+
+        self.admin = User.objects.create_superuser(
+            email="admin@example.com",
+            name="Hospital Admin",
+            password="StrongTestPassword123!",
+        )
+
+        self.staff = User.objects.create_user(
+            email="staff@example.com",
+            name="Deactivated Staff",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=False,
+        )
+
+        self.active_staff = User.objects.create_user(
+            email="active@example.com",
+            name="Active Staff",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.regular_user = User.objects.create_user(
+            email="regular@example.com",
+            name="Regular Staff",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.url = reverse(
+            "admin-staff-activate",
+            kwargs={"user_id": self.staff.id},
+        )
+
+    def test_admin_can_activate_deactivated_staff(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data,
+            {"message": "Staff account activated successfully."},
+        )
+
+        self.staff.refresh_from_db()
+
+        self.assertTrue(self.staff.is_active)
+        self.assertEqual(
+            self.staff.approval_status,
+            "approved",
+        )
+
+    def test_activated_staff_regains_access(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 200)
+
+        self.staff.refresh_from_db()
+        self.client.force_authenticate(user=self.staff)
+
+        response = self.client.get(reverse("me"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["id"],
+            self.staff.id,
+        )
+
+    def test_already_active_staff_returns_409(self):
+        self.client.force_authenticate(user=self.admin)
+
+        url = reverse(
+            "admin-staff-activate",
+            kwargs={"user_id": self.active_staff.id},
+        )
+
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.data["message"],
+            "This account is already activated.",
+        )
+
+        self.active_staff.refresh_from_db()
+        self.assertTrue(self.active_staff.is_active)
+
+    def test_activating_twice_returns_409(self):
+        self.client.force_authenticate(user=self.admin)
+
+        first_response = self.client.post(self.url)
+        second_response = self.client.post(self.url)
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(second_response.status_code, 409)
+        self.assertEqual(
+            second_response.data["message"],
+            "This account is already activated.",
+        )
+
+        self.staff.refresh_from_db()
+        self.assertTrue(self.staff.is_active)
+
+    def test_pending_target_returns_404(self):
+        self.staff.approval_status = "pending"
+        self.staff.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 404)
+
+        self.staff.refresh_from_db()
+        self.assertFalse(self.staff.is_active)
+
+    def test_rejected_target_returns_404(self):
+        self.staff.approval_status = "rejected"
+        self.staff.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 404)
+
+        self.staff.refresh_from_db()
+        self.assertFalse(self.staff.is_active)
+
+    def test_nonexistent_target_returns_404(self):
+        self.client.force_authenticate(user=self.admin)
+
+        url = reverse(
+            "admin-staff-activate",
+            kwargs={"user_id": 999999},
+        )
+
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_regular_user_cannot_activate_staff(self):
+        self.client.force_authenticate(user=self.regular_user)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.staff.refresh_from_db()
+        self.assertFalse(self.staff.is_active)
+
+    def test_unauthenticated_user_cannot_activate_staff(self):
+        response = self.client.post(self.url)
+
+        self.assertIn(response.status_code, [401, 403])
+
+        self.staff.refresh_from_db()
+        self.assertFalse(self.staff.is_active)
+
+    def test_pending_admin_cannot_activate_staff(self):
+        self.admin.approval_status = "pending"
+        self.admin.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.staff.refresh_from_db()
+        self.assertFalse(self.staff.is_active)
+
+    def test_rejected_admin_cannot_activate_staff(self):
+        self.admin.approval_status = "rejected"
+        self.admin.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.staff.refresh_from_db()
+        self.assertFalse(self.staff.is_active)
+
+    def test_inactive_admin_cannot_activate_staff(self):
+        self.admin.is_active = False
+        self.admin.save(update_fields=["is_active"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.staff.refresh_from_db()
+        self.assertFalse(self.staff.is_active)
+
+    def test_inactive_admin_cannot_reactivate_self(self):
+        self.admin.is_active = False
+        self.admin.save(update_fields=["is_active"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        url = reverse(
+            "admin-staff-activate",
+            kwargs={"user_id": self.admin.id},
+        )
+
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.admin.refresh_from_db()
+        self.assertFalse(self.admin.is_active)
+
+    def test_get_method_is_not_allowed(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 405)
+
+        self.staff.refresh_from_db()
+        self.assertFalse(self.staff.is_active)
+
+    def test_patch_method_is_not_allowed(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"is_active": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+        self.staff.refresh_from_db()
+        self.assertFalse(self.staff.is_active)
+
+    def test_post_without_csrf_token_is_rejected(self):
+        client = APIClient(enforce_csrf_checks=True)
+        client.force_login(self.admin)
+
+        response = client.post(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.staff.refresh_from_db()
+        self.assertFalse(self.staff.is_active)
+
+    def test_post_with_valid_csrf_token_succeeds(self):
+        client = APIClient(enforce_csrf_checks=True)
+        client.force_login(self.admin)
+
+        client.get(reverse("csrf"))
+
+        self.assertIn("csrftoken", client.cookies)
+
+        csrf_token = client.cookies["csrftoken"].value
+
+        response = client.post(
+            self.url,
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.staff.refresh_from_db()
+
+        self.assertTrue(self.staff.is_active)
+        self.assertEqual(
+            self.staff.approval_status,
+            "approved",
+        )
