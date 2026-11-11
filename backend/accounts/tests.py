@@ -7,6 +7,9 @@ from types import SimpleNamespace
 from django.contrib.auth.models import AnonymousUser
 from .serializers import UserProfileSerializer
 from django.urls import reverse
+from django.db import IntegrityError, transaction
+from django.db.models.deletion import ProtectedError
+from .models import Department, Role, DepartmentMembership
 
 
 class AuthenticationTests(APITestCase):
@@ -3445,4 +3448,295 @@ class ActivateStaffTests(APITestCase):
         self.assertEqual(
             self.staff.approval_status,
             "approved",
+        )
+
+
+class DepartmentRoleMembershipModelTests(TestCase):
+
+    def setUp(self):
+        User = get_user_model()
+
+        self.user = User.objects.create_user(
+            email="sara@example.com",
+            name="Sara",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.other_user = User.objects.create_user(
+            email="youssef@example.com",
+            name="Youssef",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.emergency = Department.objects.create(
+            name="Emergency",
+            description="Emergency medical services",
+        )
+
+        self.cardiology = Department.objects.create(
+            name="Cardiology",
+            description="Heart-related medical services",
+        )
+
+        self.nurse = Role.objects.create(
+            name="Nurse",
+            description="Provides nursing care",
+        )
+
+        self.doctor = Role.objects.create(
+            name="Doctor",
+            description="Provides medical care",
+        )
+
+    def create_membership(self):
+        return DepartmentMembership.objects.create(
+            user=self.user,
+            department=self.emergency,
+            role=self.nurse,
+        )
+
+    # Department tests
+
+    def test_department_creation(self):
+        self.assertEqual(self.emergency.name, "Emergency")
+        self.assertEqual(
+            self.emergency.description,
+            "Emergency medical services",
+        )
+        self.assertIsNotNone(self.emergency.id)
+        self.assertEqual(str(self.emergency), "Emergency")
+
+    def test_department_description_is_optional(self):
+        department = Department.objects.create(
+            name="Pediatrics",
+        )
+
+        self.assertEqual(department.description, "")
+
+    def test_duplicate_department_name_is_rejected(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Department.objects.create(
+                    name="Emergency",
+                )
+
+        self.assertEqual(
+            Department.objects.filter(name="Emergency").count(),
+            1,
+        )
+
+    # Role tests
+
+    def test_role_creation(self):
+        self.assertEqual(self.nurse.name, "Nurse")
+        self.assertEqual(
+            self.nurse.description,
+            "Provides nursing care",
+        )
+        self.assertIsNotNone(self.nurse.id)
+        self.assertEqual(str(self.nurse), "Nurse")
+
+    def test_role_description_is_optional(self):
+        role = Role.objects.create(
+            name="Coordinator",
+        )
+
+        self.assertEqual(role.description, "")
+
+    def test_duplicate_role_name_is_rejected(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Role.objects.create(
+                    name="Nurse",
+                )
+
+        self.assertEqual(
+            Role.objects.filter(name="Nurse").count(),
+            1,
+        )
+
+    # DepartmentMembership tests
+
+    def test_membership_creation(self):
+        membership = self.create_membership()
+
+        self.assertIsNotNone(membership.id)
+        self.assertEqual(membership.user, self.user)
+        self.assertEqual(
+            membership.department,
+            self.emergency,
+        )
+        self.assertEqual(membership.role, self.nurse)
+
+    def test_membership_string_representation(self):
+        membership = self.create_membership()
+
+        self.assertEqual(
+            str(membership),
+            "Sara - Emergency - Nurse",
+        )
+
+    def test_user_can_belong_to_multiple_departments(self):
+        self.create_membership()
+
+        DepartmentMembership.objects.create(
+            user=self.user,
+            department=self.cardiology,
+            role=self.doctor,
+        )
+
+        memberships = DepartmentMembership.objects.filter(
+            user=self.user,
+        )
+
+        self.assertEqual(memberships.count(), 2)
+
+    def test_different_users_can_join_same_department(self):
+        self.create_membership()
+
+        DepartmentMembership.objects.create(
+            user=self.other_user,
+            department=self.emergency,
+            role=self.doctor,
+        )
+
+        self.assertEqual(
+            DepartmentMembership.objects.filter(
+                department=self.emergency,
+            ).count(),
+            2,
+        )
+
+    def test_duplicate_membership_is_rejected(self):
+        self.create_membership()
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                DepartmentMembership.objects.create(
+                    user=self.user,
+                    department=self.emergency,
+                    role=self.nurse,
+                )
+
+        self.assertEqual(
+            DepartmentMembership.objects.count(),
+            1,
+        )
+
+    def test_same_department_with_different_role_is_rejected(self):
+        self.create_membership()
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                DepartmentMembership.objects.create(
+                    user=self.user,
+                    department=self.emergency,
+                    role=self.doctor,
+                )
+
+        self.assertEqual(
+            DepartmentMembership.objects.count(),
+            1,
+        )
+
+    # CASCADE and PROTECT tests
+
+    def test_deleting_user_cascades_to_memberships(self):
+        self.create_membership()
+
+        DepartmentMembership.objects.create(
+            user=self.user,
+            department=self.cardiology,
+            role=self.doctor,
+        )
+
+        self.user.delete()
+
+        self.assertEqual(
+            DepartmentMembership.objects.count(),
+            0,
+        )
+
+        self.assertTrue(
+            Department.objects.filter(
+                id=self.emergency.id
+            ).exists()
+        )
+        self.assertTrue(
+            Role.objects.filter(id=self.nurse.id).exists()
+        )
+
+    def test_deleting_assigned_department_is_protected(self):
+        self.create_membership()
+
+        with self.assertRaises(ProtectedError):
+            self.emergency.delete()
+
+        self.assertTrue(
+            Department.objects.filter(
+                id=self.emergency.id,
+            ).exists()
+        )
+        self.assertEqual(
+            DepartmentMembership.objects.count(),
+            1,
+        )
+
+    def test_deleting_assigned_role_is_protected(self):
+        self.create_membership()
+
+        with self.assertRaises(ProtectedError):
+            self.nurse.delete()
+
+        self.assertTrue(
+            Role.objects.filter(id=self.nurse.id).exists()
+        )
+        self.assertEqual(
+            DepartmentMembership.objects.count(),
+            1,
+        )
+
+    def test_unassigned_department_and_role_can_be_deleted(self):
+        department_id = self.cardiology.id
+        role_id = self.doctor.id
+
+        self.cardiology.delete()
+        self.doctor.delete()
+
+        self.assertFalse(
+            Department.objects.filter(
+                id=department_id,
+            ).exists()
+        )
+        self.assertFalse(
+            Role.objects.filter(id=role_id).exists()
+        )
+
+    def test_deleting_membership_preserves_related_objects(self):
+        membership = self.create_membership()
+        membership_id = membership.id
+
+        membership.delete()
+
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                id=membership_id,
+            ).exists()
+        )
+        self.assertTrue(
+            Department.objects.filter(
+                id=self.emergency.id,
+            ).exists()
+        )
+        self.assertTrue(
+            Role.objects.filter(id=self.nurse.id).exists()
+        )
+        self.assertTrue(
+            get_user_model().objects.filter(
+                id=self.user.id,
+            ).exists()
         )
