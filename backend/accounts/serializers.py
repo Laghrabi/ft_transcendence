@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import User
+from .models import User, Department, DepartmentMembership
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 
@@ -144,3 +144,40 @@ class AdminStaffUpdateSerializer(serializers.ModelSerializer):
 			"name",
 			"email",
 		]
+
+class DepartmentSerializer(serializers.ModelSerializer):
+    """
+    Serialize and validate department information.
+
+    Supports creating, retrieving, and updating departments.
+    The department ID is read-only.
+    """
+
+    class Meta:
+        model = Department
+        fields = [
+            "id",
+            "name",
+            "description",
+        ]
+        read_only_fields = ["id"]
+
+
+class DepartmentMembershipSerializer(serializers.ModelSerializer):
+    """
+    Serialize and validate staff department memberships.
+
+    Manages the relationship between users, departments, and roles.
+    Supports creating and updating memberships, while keeping
+    the membership ID read-only.
+    """
+
+    class Meta:
+        model = DepartmentMembership
+        fields = [
+            "id",
+            "user",
+            "department",
+            "role",
+        ]
+        read_only_fields = ["id"]

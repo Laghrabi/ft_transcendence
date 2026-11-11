@@ -9,10 +9,12 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_GET
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from .serializers import RegisterSerializer, PendingRegistrationSerializer, UserProfileSerializer, UpdateProfileSerializer
-from .models import User
+from .models import User, Department, DepartmentMembership
 from django.shortcuts import get_object_or_404
 from .permissions import IsApprovedUser
-from .serializers import StaffListSerializer, AdminStaffUpdateSerializer, AdminStaffListSerializer
+from .serializers import StaffListSerializer, AdminStaffUpdateSerializer, AdminStaffListSerializer, DepartmentSerializer
+from django.db.models.deletion import ProtectedError
+from .serializers import DepartmentMembershipSerializer
 
 @method_decorator(csrf_protect, name="dispatch")
 class LoginView(APIView):
@@ -406,6 +408,277 @@ class ActivateStaffView(APIView):
 
         return Response(
             data={"message": "Staff account activated successfully."}, status=status.HTTP_200_OK)
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class DepartmentListCreateView(APIView):
+    """
+    Manage department listing and creation.
+
+    Approved users can retrieve all departments ordered by ID.
+    Only administrators can create new departments.
+    """
+
+    permission_classes = [IsApprovedUser]
+
+    def get(self, request):
+        """Return a list of all departments ordered by ID."""
+
+        departments = Department.objects.all().order_by("id")
+
+        serializer = DepartmentSerializer(
+            departments,
+            many=True
+        )
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_200_OK
+        )
+
+    def post(self, request):
+        """Validate and create a new department with administrator privileges."""
+
+        if not request.user.is_superuser:
+            return Response(
+                data={"message": "Administrator access required."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = DepartmentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_201_CREATED
+        )
+
+@method_decorator(csrf_protect, name="dispatch")
+class DepartmentDetailView(APIView):
+    """
+    Manage updates and deletion of existing departments.
+
+    Access is restricted to approved administrators.
+    Supports partial updates and prevents deletion of departments
+    that have assigned staff members.
+    """
+
+    permission_classes = [IsApprovedUser]
+
+    def patch(self, request, department_id):
+        """Validate and partially update a department by its ID."""
+
+        if not request.user.is_superuser:
+            return Response(
+                data={"message": "Administrator access required."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        department = get_object_or_404(
+            Department,
+            id=department_id
+        )
+
+        serializer = DepartmentSerializer(
+            department,
+            data=request.data,
+            partial=True
+        )
+
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_200_OK
+        )
+
+    
+    def delete(self, request, department_id):
+        """Delete a department unless existing staff memberships protect it."""
+
+        if not request.user.is_superuser:
+            return Response(
+                data={"message": "Administrator access required."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        department = get_object_or_404(
+            Department,
+            id=department_id
+        )
+
+        try:
+            department.delete()
+        except ProtectedError:
+            return Response(
+                data={
+                    "message": "Cannot delete a department with assigned staff members."
+                },
+                status=status.HTTP_409_CONFLICT
+            )
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class DepartmentMembershipListCreateView(APIView):
+    """
+    Manage department membership listing and creation.
+
+    Approved users can view memberships, optionally filtered by
+    department. Administrators can view all memberships, including
+    those of inactive or unapproved users, and assign active,
+    approved staff members to departments.
+    """
+
+    permission_classes = [IsApprovedUser]
+
+    def get(self, request):
+        """
+        Return memberships ordered by ID with optional department filtering.
+
+        Non-administrators can only view memberships belonging to
+        active, approved staff members.
+        """
+
+        memberships = DepartmentMembership.objects.all().order_by("id")
+
+        if not request.user.is_superuser:
+            memberships = memberships.filter(
+                user__is_active=True,
+                user__approval_status="approved"
+            )
+
+        department_id = request.query_params.get("department_id")
+
+        if department_id is not None:
+            if not department_id.isdecimal() or int(department_id) < 1:
+                return Response(
+                    data={"department_id": ["A positive integer is required."]},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            memberships = memberships.filter(
+                department_id=int(department_id)
+            )
+
+        serializer = DepartmentMembershipSerializer(
+            memberships,
+            many=True
+        )
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_200_OK
+        )
+
+    def post(self, request):
+        """
+        Create a department membership with administrator privileges.
+
+        Only active, approved staff members can be assigned
+        to departments.
+        """
+
+        if not request.user.is_superuser:
+            return Response(
+                data={"message": "Administrator access required."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = DepartmentMembershipSerializer(
+            data=request.data
+        )
+
+        serializer.is_valid(raise_exception=True)
+
+        user = serializer.validated_data["user"]
+
+        if not user.is_active or user.approval_status != "approved":
+            return Response(
+                data={
+                    "user": [
+                        "Only active, approved staff can be assigned to departments."
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer.save()
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_201_CREATED
+        )
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class DepartmentMembershipDetailView(APIView):
+    """
+    Manage updates and deletion of department memberships.
+
+    Access is restricted to approved administrators.
+    Supports updating only the role assigned to a membership
+    and removing staff members from departments.
+    """
+
+    permission_classes = [IsApprovedUser]
+
+    def patch(self, request, membership_id):
+        """Update only the role of an existing department membership."""
+
+        if not request.user.is_superuser:
+            return Response(
+                data={"message": "Administrator access required."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        membership = get_object_or_404(
+            DepartmentMembership,
+            id=membership_id
+        )
+
+        if set(request.data.keys()) != {"role"}:
+            return Response(
+                data={"message": "Only the role field can be updated."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = DepartmentMembershipSerializer(
+            membership,
+            data=request.data,
+            partial=True
+        )
+
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_200_OK
+        )
+
+    def delete(self, request, membership_id):
+        """Remove an existing department membership by its ID."""
+        
+        if not request.user.is_superuser:
+            return Response(
+                data={"message": "Administrator access required."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        membership = get_object_or_404(
+            DepartmentMembership,
+            id=membership_id
+        )
+
+        membership.delete()
+
+        return Response(
+            status=status.HTTP_204_NO_CONTENT
+        )
 
 @require_GET
 def generate_token(request):
