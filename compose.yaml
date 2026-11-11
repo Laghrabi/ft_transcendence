@@ -72,9 +72,9 @@ services:
     container_name: careflow_backend
     restart: unless-stopped
     environment:
-      DJANGO_DEBUG: "${DJANGO_DEBUG:-1}"
-      DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}"
-      DJANGO_ASGI_APP: "${DJANGO_ASGI_APP:-config.asgi:application}"
+      DJANGO_DEBUG: "${DJANGO_DEBUG}"
+      DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS}"
+      DJANGO_ASGI_APP: "${DJANGO_ASGI_APP}"
     volumes:
       - django_static:/app/staticfiles
       - vault_token:/vault/token:ro
@@ -113,11 +113,120 @@ services:
     networks:
       - app-net
       - public-net
+      - monitoring-net
     deploy:
       resources:
         limits:
           memory: 256M
           cpus: "0.50"
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: careflow_prometheus
+    restart: unless-stopped
+    volumes:
+      - ./infra/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+    networks:
+      - monitoring-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: careflow_grafana
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD}"
+      GF_SERVER_ROOT_URL: "https://localhost/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    volumes:
+      - ./infra/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - monitoring-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: careflow_cadvisor
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - monitoring-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.20"
+
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    container_name: careflow_node_exporter
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+    networks:
+      - monitoring-net
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.10"
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: careflow_postgres_exporter
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATA_SOURCE_URI: "db:5432/${POSTGRES_DB}?sslmode=disable"
+      DATA_SOURCE_USER: "${POSTGRES_USER}"
+      DATA_SOURCE_PASS: "${POSTGRES_PASSWORD}"
+    networks:
+      - monitoring-net
+      - data-net
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.10"
 
 volumes:
   postgres_data:
@@ -125,9 +234,12 @@ volumes:
   django_static:
   vault_data:
   vault_token:
+  prometheus_data:
+  grafana_data:
 
 networks:
   public-net:
   app-net:
   data-net:
     internal: true
+  monitoring-net:

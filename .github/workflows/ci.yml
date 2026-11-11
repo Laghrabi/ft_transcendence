@@ -4,7 +4,7 @@ on:
   push:
     paths: &shared_paths
       - 'backend/**'
-      - 'infra/nginx/**'
+      - 'infra/**'
       - 'compose.yaml'
       - '.env.example'
       - '.github/workflows/ci.yml'
@@ -68,6 +68,9 @@ jobs:
           test -f infra/nginx/Dockerfile
           test -f infra/nginx/nginx.conf
           test -f infra/nginx/conf.d/default.conf
+          test -f infra/monitoring/prometheus/prometheus.yml
+          test -f infra/monitoring/grafana/provisioning/datasources/prometheus.yml
+          test -f infra/monitoring/grafana/provisioning/dashboards/dashboards.yml
           echo "Required DevOps files are present."
 
       # Build backend image only if backend or compose files changed
