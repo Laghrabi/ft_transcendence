@@ -15,6 +15,12 @@ from django.test import TestCase
 from django.contrib.auth.models import AnonymousUser
 from channels.testing import WebsocketCommunicator
 from collaboration.consumers import NotificationConsumer
+from channels.layers import get_channel_layer
+import json
+from asgiref.sync import async_to_sync
+from asgiref.sync import sync_to_async
+from django.db import transaction
+
 
 # class CommentAPITests(APITestCase):
 
@@ -412,21 +418,81 @@ class NotificationConsumerTests(TestCase):
 
     def setUp(self):
         User = get_user_model()
-        self.user = User.objects.create_user(
+        self.sara = User.objects.create_user(
             username="salma",
             password="test_password_123!"
         )
-    async def test_anonymous_connection_accepted(self):
-        com = WebsocketCommunicator(NotificationConsumer.as_asgi(), "/ws/notifications/")
-        com.scope["user"] = self.user
-        ced, _ = await com.connect()
-        self.assertTrue(ced)
-        await com.disconnect()
+        self.hamza = User.objects.create_user(
+            username="hamza",
+            password="test_password_123!"
+        )
+    def create_and_broadcast(self):
+            with self.captureOnCommitCallbacks(execute=True):
+                notification = create_notification(
+                    recipient=self.sara,
+                    message="Task 12 was assigned to you"
+                )
+            return notification
+    async def test_realtime_notification_is_private(self):
+        com = WebsocketCommunicator(
+            NotificationConsumer.as_asgi(),
+            "/ws/notifications/"
+        )
+        com_hamza = WebsocketCommunicator(NotificationConsumer.as_asgi(), "/ws/notifications/")
+    
+        com.scope["user"] = self.sara
+        com_hamza.scope["user"] = self.hamza
+
+        connected_sara, _ = await com.connect()
+        connected_hamza, _ = await com_hamza.connect()
+
+        self.assertTrue(connected_sara)
+        self.assertTrue(connected_hamza)
+
+    
+        try:
+            # Create a database notification and broadcast it through Redis
+            notification = await sync_to_async(self.create_and_broadcast)()
+    
+            # Receive the message sent by the Consumer
+            response = await com.receive_from(timeout=2)
+            self.assertTrue(await com_hamza.receive_nothing(timeout=0.3))
+            data = json.loads(response)
+    
+            # Verify the received message
+            self.assertEqual(data["type"], "notification")
+            self.assertEqual(data["message"], notification.message)
+    
+        finally:
+            if connected_sara:
+                await com.disconnect()
+            if connected_hamza:
+                await com_hamza.disconnect()
+        # async def test_realtime_notification_received(self):
+    def test_rollback_does_not_broadcast(self):
+        message = "ROLLBACK_TEST_001"
+
+        with self.captureOnCommitCallbacks(execute=True) as callbacks:
+            with self.assertRaises(ValueError):
+                with transaction.atomic():
+                    create_notification(
+                        recipient=self.sara,
+                        message=message
+                    )
+
+                    raise ValueError("Simulate database failure")
+
+        self.assertFalse(
+            Notification.objects.filter(message=message).exists()
+        )
+
+        self.assertEqual(len(callbacks), 0)    
 
 
 
 
 
+    
 
 
 
