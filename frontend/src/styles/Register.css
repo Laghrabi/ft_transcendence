@@ -329,6 +329,34 @@
           color: #a29c92;
 }
 
+
+.requirement-met {
+  color: #27834f !important;
+  font-weight: 600;
+}
+
+.register-error {
+  color: #b42318;
+  background: #fff1f0;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.register-success {
+  color: #276749;
+  background: #eaf7ed;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.register-submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+
 @media(max-width:850px) {
           .register-card {
                     grid-template-columns: 1fr;

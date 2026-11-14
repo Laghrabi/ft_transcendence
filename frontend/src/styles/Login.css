@@ -291,6 +291,20 @@ a:hover {
   font-weight: normal;
 }
 
+
+.login-success {
+  color: #27834f;
+  font-size: 14px;
+  font-weight: 600;
+  margin-top: 12px;
+}
+
+.sign-in-button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+
 @media (max-width: 900px) {
   .left-panel {
     padding: 38px 32px 30px;

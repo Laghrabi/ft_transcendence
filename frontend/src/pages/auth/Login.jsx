@@ -1,5 +1,8 @@
+
 import "../../styles/Login.css";
 import { useState } from "react";
+import { Link } from "react-router-dom";
+import { loginUser, getCurrentUser } from "../../api/auth";
 
 function LeftPanel() {
   return (
@@ -13,12 +16,16 @@ function LeftPanel() {
       </header>
 
       <div className="left-intro">
-        <span className="staff-badge">STAFF PORTAL • OPS CENTRAL</span>
+        <span className="staff-badge">
+          STAFF PORTAL • OPS CENTRAL
+        </span>
+
         <h2>
           Better coordination.
           <br />
           Smoother patient care.
         </h2>
+
         <p>
           CareFlow helps hospital teams coordinate cases, manage tasks,
           and track workflows across departments through one connected platform.
@@ -30,7 +37,9 @@ function LeftPanel() {
           <span className="feature-icon" aria-hidden="true">⇄</span>
           <div>
             <h3>Cross-department coordination</h3>
-            <p>Keep hospital cases and workflows organized across departments.</p>
+            <p>
+              Keep hospital cases and workflows organized across departments.
+            </p>
           </div>
         </div>
 
@@ -38,7 +47,9 @@ function LeftPanel() {
           <span className="feature-icon" aria-hidden="true">⌁</span>
           <div>
             <h3>Task and case tracking</h3>
-            <p>Help staff follow assigned tasks, case progress, and responsibilities.</p>
+            <p>
+              Help staff follow assigned tasks, case progress, and responsibilities.
+            </p>
           </div>
         </div>
 
@@ -46,7 +57,9 @@ function LeftPanel() {
           <span className="feature-icon" aria-hidden="true">◷</span>
           <div>
             <h3>Workflow visibility</h3>
-            <p>Make task dependencies, progress, and potential delays easier to identify.</p>
+            <p>
+              Make task dependencies, progress, and potential delays easier to identify.
+            </p>
           </div>
         </div>
       </div>
@@ -60,19 +73,35 @@ function LeftPanel() {
 }
 
 function RightPanel() {
-  //hook is a special fun react provides to giv components extra abilities
-
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  function handleSubmit(event) {
+  const [success, setSuccess] = useState("");
+
+  async function handleSubmit(event) {
     event.preventDefault();
-    // console.log("Login form submitted");
-    setError(
-      "Login is not available yet. Waiting for backend authentication."
-    );
+    if (loading) return;
+
+    setError("");
+    setSuccess("");
+    setLoading(true);
+
+    try {
+      await loginUser(email.trim(), password);
+
+      const user = await getCurrentUser();
+
+      setSuccess(
+        `Welcome, ${user.name || email}! You are successfully logged in.`
+      );
+    } catch (err) {
+      setError(err.message || "Login failed. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   }
+
   return (
     <section className="right-panel">
       <div className="right-content">
@@ -82,9 +111,10 @@ function RightPanel() {
           <p>Sign in with your hospital staff credentials.</p>
         </div>
 
-        <form className="login-form" onSubmit={handleSubmit}>
+        <form className="login-form" onSubmit={handleSubmit} aria-busy={loading}>
           <div className="field">
             <label htmlFor="email">Hospital / Work Email</label>
+
             <input
               type="email"
               id="email"
@@ -95,11 +125,11 @@ function RightPanel() {
               value={email}
               onChange={(event) => setEmail(event.target.value)}
             />
-            {/* <p style={{ color: "red", fontSize: "20px" }}>You are typing: {email}</p> */}
           </div>
 
           <div className="field">
             <label htmlFor="password">Password</label>
+
             <input
               type="password"
               id="password"
@@ -110,22 +140,38 @@ function RightPanel() {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
             />
-            {/* <p style={{ color: "red", fontSize: "20px" }}>You are typing: {password}</p> */}
           </div>
 
-          <button className="sign-in-button" type="submit">
-            Sign In to CareFlow <span aria-hidden="true">→</span>
+          <button
+            className="sign-in-button"
+            type="submit"
+            disabled={loading}
+          >
+            {loading ? "Signing in..." : "Sign In to CareFlow"}
+
+            {!loading && (
+              <span aria-hidden="true"> →</span>
+            )}
           </button>
+
           {error && (
             <p className="login-error" role="alert">
               {error}
             </p>
-          )}        
-          </form>
+          )}
+
+          {success && (
+            <p className="login-success" role="status">
+              {success}
+            </p>
+          )}
+        </form>
 
         <p className="register-text">
           Don't have an account?{" "}
-          <a href="/register">Register hospital staff</a>
+          <Link to="/register">
+            Register hospital staff
+          </Link>
         </p>
       </div>
 
@@ -135,6 +181,7 @@ function RightPanel() {
           <br />
           Authorized clinical &amp; ops personnel only.
         </p>
+
         <div>
           <a href="/privacy">Privacy Policy</a>
           <span aria-hidden="true">•</span>
