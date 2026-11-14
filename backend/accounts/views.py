@@ -9,12 +9,12 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_GET
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from .serializers import RegisterSerializer, PendingRegistrationSerializer, UserProfileSerializer, UpdateProfileSerializer
-from .models import User, Department, DepartmentMembership
+from .models import User, Department, DepartmentMembership, Role
 from django.shortcuts import get_object_or_404
 from .permissions import IsApprovedUser
 from .serializers import StaffListSerializer, AdminStaffUpdateSerializer, AdminStaffListSerializer, DepartmentSerializer
 from django.db.models.deletion import ProtectedError
-from .serializers import DepartmentMembershipSerializer
+from .serializers import DepartmentMembershipSerializer, RoleSerializer
 
 @method_decorator(csrf_protect, name="dispatch")
 class LoginView(APIView):
@@ -675,6 +675,94 @@ class DepartmentMembershipDetailView(APIView):
         )
 
         membership.delete()
+
+        return Response(
+            status=status.HTTP_204_NO_CONTENT
+        )
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class RoleListCreateView(APIView):
+    permission_classes = [IsApprovedUser]
+
+    def get(self, request):
+        roles = Role.objects.all().order_by("id")
+
+        serializer = RoleSerializer(
+            roles,
+            many=True
+        )
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_200_OK
+        )
+
+    def post(self, request):
+        if not request.user.is_superuser:
+            return Response(
+                data={"message": "Administrator access required."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = RoleSerializer(
+            data=request.data
+        )
+
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_201_CREATED
+        )
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class RoleDetailView(APIView):
+    permission_classes = [IsApprovedUser]
+
+    def patch(self, request, role_id):
+        if not request.user.is_superuser:
+            return Response(
+                data={"message": "Administrator access required."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        role = get_object_or_404(Role, id=role_id)
+
+        serializer = RoleSerializer(
+            role,
+            data=request.data,
+            partial=True
+        )
+
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_200_OK
+        )
+
+    def delete(self, request, role_id):
+        if not request.user.is_superuser:
+            return Response(
+                data={"message": "Administrator access required."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        role = get_object_or_404(Role, id=role_id)
+
+        try:
+            role.delete()
+        except ProtectedError:
+            return Response(
+                data={
+                    "message": "Cannot delete a role that is currently in use."
+                },
+                status=status.HTTP_409_CONFLICT
+            )
 
         return Response(
             status=status.HTTP_204_NO_CONTENT

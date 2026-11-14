@@ -80,3 +80,24 @@ class DepartmentMembership(models.Model):
 
     def __str__(self):
         return f"{self.user.name} - {self.department.name} - {self.role.name}"
+
+
+class RolePermission(models.Model):
+    role = models.ForeignKey(
+        Role,
+        on_delete=models.CASCADE,
+        related_name="permissions"
+    )
+
+    codename = models.CharField(max_length=100)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["role", "codename"],
+                name="unique_role_permission"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.role.name} - {self.codename}"

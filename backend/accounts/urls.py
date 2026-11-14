@@ -2,7 +2,8 @@ from django.urls import path
 from .views import LoginView, generate_token, MeView, LogoutView, RegisterView
 from .views import PendingRegistrationsView, ApproveRegistrationView, RejectRegistrationView, StaffProfileView
 from .views import StaffListView, AdminStaffUpdateView, DeactivateStaffView, ActivateStaffView, DepartmentListCreateView
-from .views import DepartmentDetailView, DepartmentMembershipListCreateView, DepartmentMembershipDetailView
+from .views import DepartmentDetailView, DepartmentMembershipListCreateView, DepartmentMembershipDetailView, RoleListCreateView
+from .views import RoleDetailView
 
 urlpatterns = [
     path("login/", LoginView.as_view(), name="login"),
@@ -34,4 +35,6 @@ urlpatterns = [
     path("departments/<int:department_id>/", DepartmentDetailView.as_view(), name="department-detail"),
     path("memberships/", DepartmentMembershipListCreateView.as_view(), name="membership-list-create"),
     path("memberships/<int:membership_id>/", DepartmentMembershipDetailView.as_view(), name="membership-detail"),
+    path("roles/", RoleListCreateView.as_view(), name="role-list-create"),
+    path("roles/<int:role_id>/", RoleDetailView.as_view(), name="role-detail"),
 ]

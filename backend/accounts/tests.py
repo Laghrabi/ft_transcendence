@@ -9,7 +9,7 @@ from .serializers import UserProfileSerializer
 from django.urls import reverse
 from django.db import IntegrityError, transaction
 from django.db.models.deletion import ProtectedError
-from .models import Department, Role, DepartmentMembership
+from .models import Department, Role, DepartmentMembership, RolePermission
 
 
 class AuthenticationTests(APITestCase):
@@ -6017,3 +6017,1410 @@ class DepartmentMembershipDetailTests(APITestCase):
         response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, 405)
+
+
+class RoleListCreateTests(APITestCase):
+
+    @classmethod
+    def setUpTestData(cls):
+        User = get_user_model()
+
+        cls.admin = User.objects.create_superuser(
+            email="admin@example.com",
+            name="Hospital Admin",
+            password="StrongTestPassword123!",
+        )
+
+        cls.staff = User.objects.create_user(
+            email="staff@example.com",
+            name="Approved Staff",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        cls.pending_staff = User.objects.create_user(
+            email="pending@example.com",
+            name="Pending Staff",
+            password="StrongTestPassword123!",
+            approval_status="pending",
+            is_active=True,
+        )
+
+        cls.rejected_staff = User.objects.create_user(
+            email="rejected@example.com",
+            name="Rejected Staff",
+            password="StrongTestPassword123!",
+            approval_status="rejected",
+            is_active=True,
+        )
+
+        cls.inactive_staff = User.objects.create_user(
+            email="inactive@example.com",
+            name="Inactive Staff",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=False,
+        )
+
+        cls.nurse = Role.objects.create(
+            name="Nurse",
+            description="Provides nursing care.",
+        )
+
+        cls.doctor = Role.objects.create(
+            name="Doctor",
+            description="Provides medical care.",
+        )
+
+        cls.url = reverse("role-list-create")
+
+    def valid_payload(self):
+        return {
+            "name": "Coordinator",
+            "description": "Coordinates departmental activities.",
+        }
+
+    # =====================================================
+    # GET: Successful listing
+    # =====================================================
+
+    def test_approved_staff_can_list_roles(self):
+        self.client.force_authenticate(user=self.staff)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 2)
+
+    def test_admin_can_list_roles(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 2)
+
+    def test_roles_are_ordered_by_id(self):
+        self.client.force_authenticate(user=self.staff)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data[0]["id"], self.nurse.id)
+        self.assertEqual(response.data[1]["id"], self.doctor.id)
+
+    def test_role_response_contains_correct_fields(self):
+        self.client.force_authenticate(user=self.staff)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+        role = response.data[0]
+
+        self.assertEqual(
+            set(role.keys()),
+            {"id", "name", "description"},
+        )
+
+        self.assertEqual(role["id"], self.nurse.id)
+        self.assertEqual(role["name"], "Nurse")
+        self.assertEqual(
+            role["description"],
+            "Provides nursing care.",
+        )
+
+    def test_empty_role_list_returns_empty_array(self):
+        self.client.force_authenticate(user=self.admin)
+
+        Role.objects.all().delete()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, [])
+
+    # =====================================================
+    # GET: Permissions
+    # =====================================================
+
+    def test_unauthenticated_user_cannot_list_roles(self):
+        response = self.client.get(self.url)
+
+        self.assertIn(response.status_code, [401, 403])
+
+    def test_pending_user_cannot_list_roles(self):
+        self.client.force_authenticate(user=self.pending_staff)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_rejected_user_cannot_list_roles(self):
+        self.client.force_authenticate(user=self.rejected_staff)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_inactive_user_cannot_list_roles(self):
+        self.client.force_authenticate(user=self.inactive_staff)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    # =====================================================
+    # POST: Successful creation
+    # =====================================================
+
+    def test_admin_can_create_role(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(
+            self.url,
+            self.valid_payload(),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+
+        self.assertIn("id", response.data)
+        self.assertEqual(
+            response.data["name"],
+            "Coordinator",
+        )
+        self.assertEqual(
+            response.data["description"],
+            "Coordinates departmental activities.",
+        )
+
+        self.assertTrue(
+            Role.objects.filter(
+                name="Coordinator",
+            ).exists()
+        )
+
+        self.assertEqual(Role.objects.count(), 3)
+
+    def test_admin_can_create_role_without_description(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(
+            self.url,
+            {"name": "Pharmacist"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            response.data["name"],
+            "Pharmacist",
+        )
+        self.assertEqual(
+            response.data["description"],
+            "",
+        )
+
+    def test_role_id_is_read_only(self):
+        self.client.force_authenticate(user=self.admin)
+
+        payload = self.valid_payload()
+        payload["id"] = self.nurse.id
+
+        response = self.client.post(
+            self.url,
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+
+        self.assertNotEqual(
+            response.data["id"],
+            self.nurse.id,
+        )
+
+        self.assertTrue(
+            Role.objects.filter(
+                id=self.nurse.id,
+                name="Nurse",
+            ).exists()
+        )
+
+    # =====================================================
+    # POST: Validation
+    # =====================================================
+
+    def test_duplicate_role_name_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(
+            self.url,
+            {
+                "name": "Nurse",
+                "description": "Another nursing role.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("name", response.data)
+        self.assertEqual(Role.objects.count(), 2)
+
+    def test_blank_role_name_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(
+            self.url,
+            {
+                "name": "",
+                "description": "Test description",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("name", response.data)
+
+    def test_whitespace_role_name_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(
+            self.url,
+            {
+                "name": "   ",
+                "description": "Test description",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("name", response.data)
+
+    def test_missing_role_name_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(
+            self.url,
+            {
+                "description": "Role without a name.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("name", response.data)
+
+    def test_role_name_over_max_length_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(
+            self.url,
+            {
+                "name": "A" * 101,
+                "description": "Test description",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("name", response.data)
+
+    def test_invalid_description_type_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(
+            self.url,
+            {
+                "name": "Technician",
+                "description": ["invalid", "description"],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("description", response.data)
+
+    # =====================================================
+    # POST: Permissions
+    # =====================================================
+
+    def test_regular_staff_cannot_create_role(self):
+        self.client.force_authenticate(user=self.staff)
+
+        response = self.client.post(
+            self.url,
+            self.valid_payload(),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.assertEqual(
+            response.data["message"],
+            "Administrator access required.",
+        )
+
+        self.assertFalse(
+            Role.objects.filter(
+                name="Coordinator",
+            ).exists()
+        )
+
+    def test_unauthenticated_user_cannot_create_role(self):
+        response = self.client.post(
+            self.url,
+            self.valid_payload(),
+            format="json",
+        )
+
+        self.assertIn(response.status_code, [401, 403])
+        self.assertEqual(Role.objects.count(), 2)
+
+    def test_pending_admin_cannot_create_role(self):
+        self.admin.approval_status = "pending"
+        self.admin.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(
+            self.url,
+            self.valid_payload(),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(Role.objects.count(), 2)
+
+    def test_rejected_admin_cannot_create_role(self):
+        self.admin.approval_status = "rejected"
+        self.admin.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(
+            self.url,
+            self.valid_payload(),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(Role.objects.count(), 2)
+
+    def test_inactive_admin_cannot_create_role(self):
+        self.admin.is_active = False
+        self.admin.save(update_fields=["is_active"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(
+            self.url,
+            self.valid_payload(),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(Role.objects.count(), 2)
+
+    # =====================================================
+    # POST: CSRF protection
+    # =====================================================
+
+    def test_post_without_csrf_token_is_rejected(self):
+        client = APIClient(enforce_csrf_checks=True)
+        client.force_login(self.admin)
+
+        response = client.post(
+            self.url,
+            self.valid_payload(),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(Role.objects.count(), 2)
+
+    def test_post_with_valid_csrf_token_succeeds(self):
+        client = APIClient(enforce_csrf_checks=True)
+        client.force_login(self.admin)
+
+        client.get(reverse("csrf"))
+
+        self.assertIn("csrftoken", client.cookies)
+
+        csrf_token = client.cookies["csrftoken"].value
+
+        response = client.post(
+            self.url,
+            self.valid_payload(),
+            format="json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+
+        self.assertEqual(response.status_code, 201)
+
+        self.assertTrue(
+            Role.objects.filter(
+                name="Coordinator",
+            ).exists()
+        )
+
+    # =====================================================
+    # Unsupported HTTP methods
+    # =====================================================
+
+    def test_patch_method_is_not_allowed(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Updated Role"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_delete_method_is_not_allowed(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, 405)
+
+
+class RoleDetailTests(APITestCase):
+
+    @classmethod
+    def setUpTestData(cls):
+        User = get_user_model()
+
+        cls.admin = User.objects.create_superuser(
+            email="admin@example.com",
+            name="Hospital Admin",
+            password="StrongTestPassword123!",
+        )
+
+        cls.staff = User.objects.create_user(
+            email="staff@example.com",
+            name="Approved Staff",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        cls.pending_staff = User.objects.create_user(
+            email="pending@example.com",
+            name="Pending Staff",
+            password="StrongTestPassword123!",
+            approval_status="pending",
+            is_active=True,
+        )
+
+        cls.rejected_staff = User.objects.create_user(
+            email="rejected@example.com",
+            name="Rejected Staff",
+            password="StrongTestPassword123!",
+            approval_status="rejected",
+            is_active=True,
+        )
+
+        cls.inactive_staff = User.objects.create_user(
+            email="inactive@example.com",
+            name="Inactive Staff",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=False,
+        )
+
+        cls.emergency = Department.objects.create(
+            name="Emergency",
+        )
+
+        cls.nurse = Role.objects.create(
+            name="Nurse",
+            description="Provides nursing care.",
+        )
+
+        cls.doctor = Role.objects.create(
+            name="Doctor",
+            description="Provides medical care.",
+        )
+
+        cls.membership = DepartmentMembership.objects.create(
+            user=cls.staff,
+            department=cls.emergency,
+            role=cls.nurse,
+        )
+
+        cls.url = reverse(
+            "role-detail",
+            kwargs={"role_id": cls.doctor.id},
+        )
+
+        cls.protected_url = reverse(
+            "role-detail",
+            kwargs={"role_id": cls.nurse.id},
+        )
+
+    # =====================================================
+    # PATCH: Successful updates
+    # =====================================================
+
+    def test_admin_can_update_name_and_description(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {
+                "name": "Senior Doctor",
+                "description": "Senior medical practitioner.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["name"], "Senior Doctor")
+        self.assertEqual(
+            response.data["description"],
+            "Senior medical practitioner.",
+        )
+
+        self.doctor.refresh_from_db()
+        self.assertEqual(self.doctor.name, "Senior Doctor")
+        self.assertEqual(
+            self.doctor.description,
+            "Senior medical practitioner.",
+        )
+
+    def test_patch_name_only_preserves_description(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Senior Doctor"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.doctor.refresh_from_db()
+
+        self.assertEqual(self.doctor.name, "Senior Doctor")
+        self.assertEqual(
+            self.doctor.description,
+            "Provides medical care.",
+        )
+
+    def test_patch_description_only_preserves_name(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"description": "Updated medical responsibilities."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.doctor.refresh_from_db()
+
+        self.assertEqual(self.doctor.name, "Doctor")
+        self.assertEqual(
+            self.doctor.description,
+            "Updated medical responsibilities.",
+        )
+
+    def test_admin_can_clear_description(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"description": ""},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.doctor.refresh_from_db()
+        self.assertEqual(self.doctor.description, "")
+
+    def test_updating_role_with_same_name_succeeds(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Doctor"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["name"], "Doctor")
+
+    def test_role_id_is_read_only(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {
+                "id": 999999,
+                "name": "Senior Doctor",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["id"], self.doctor.id)
+
+        self.assertTrue(
+            Role.objects.filter(
+                id=self.doctor.id,
+                name="Senior Doctor",
+            ).exists()
+        )
+
+    def test_empty_patch_succeeds_without_changes(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.doctor.refresh_from_db()
+
+        self.assertEqual(self.doctor.name, "Doctor")
+        self.assertEqual(
+            self.doctor.description,
+            "Provides medical care.",
+        )
+
+    # =====================================================
+    # PATCH: Validation
+    # =====================================================
+
+    def test_duplicate_role_name_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Nurse"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("name", response.data)
+
+        self.doctor.refresh_from_db()
+        self.assertEqual(self.doctor.name, "Doctor")
+
+    def test_blank_role_name_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": ""},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("name", response.data)
+
+    def test_whitespace_role_name_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "   "},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("name", response.data)
+
+    def test_role_name_over_max_length_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "A" * 101},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("name", response.data)
+
+    def test_invalid_description_type_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"description": ["invalid", "description"]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("description", response.data)
+
+    def test_null_description_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"description": None},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("description", response.data)
+
+    # =====================================================
+    # PATCH: Nonexistent role
+    # =====================================================
+
+    def test_patch_nonexistent_role_returns_404(self):
+        self.client.force_authenticate(user=self.admin)
+
+        url = reverse(
+            "role-detail",
+            kwargs={"role_id": 999999},
+        )
+
+        response = self.client.patch(
+            url,
+            {"name": "Updated Role"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    # =====================================================
+    # PATCH: Permissions
+    # =====================================================
+
+    def test_regular_staff_cannot_patch_role(self):
+        self.client.force_authenticate(user=self.staff)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Senior Doctor"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.data["message"],
+            "Administrator access required.",
+        )
+
+        self.doctor.refresh_from_db()
+        self.assertEqual(self.doctor.name, "Doctor")
+
+    def test_unauthenticated_user_cannot_patch_role(self):
+        response = self.client.patch(
+            self.url,
+            {"name": "Senior Doctor"},
+            format="json",
+        )
+
+        self.assertIn(response.status_code, [401, 403])
+
+    def test_pending_admin_cannot_patch_role(self):
+        self.admin.approval_status = "pending"
+        self.admin.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Senior Doctor"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_rejected_admin_cannot_patch_role(self):
+        self.admin.approval_status = "rejected"
+        self.admin.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Senior Doctor"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_inactive_admin_cannot_patch_role(self):
+        self.admin.is_active = False
+        self.admin.save(update_fields=["is_active"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            self.url,
+            {"name": "Senior Doctor"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    # =====================================================
+    # PATCH: CSRF protection
+    # =====================================================
+
+    def test_patch_without_csrf_token_is_rejected(self):
+        client = APIClient(enforce_csrf_checks=True)
+        client.force_login(self.admin)
+
+        response = client.patch(
+            self.url,
+            {"name": "Senior Doctor"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.doctor.refresh_from_db()
+        self.assertEqual(self.doctor.name, "Doctor")
+
+    def test_patch_with_valid_csrf_token_succeeds(self):
+        client = APIClient(enforce_csrf_checks=True)
+        client.force_login(self.admin)
+
+        client.get(reverse("csrf"))
+
+        self.assertIn("csrftoken", client.cookies)
+
+        csrf_token = client.cookies["csrftoken"].value
+
+        response = client.patch(
+            self.url,
+            {"name": "Senior Doctor"},
+            format="json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.doctor.refresh_from_db()
+        self.assertEqual(self.doctor.name, "Senior Doctor")
+
+    # =====================================================
+    # DELETE: Successful deletion
+    # =====================================================
+
+    def test_admin_can_delete_unused_role(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.content, b"")
+
+        self.assertFalse(
+            Role.objects.filter(
+                id=self.doctor.id,
+            ).exists()
+        )
+
+    def test_deleting_role_preserves_other_roles(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, 204)
+
+        self.assertTrue(
+            Role.objects.filter(
+                id=self.nurse.id,
+            ).exists()
+        )
+
+        self.assertEqual(Role.objects.count(), 1)
+
+    def test_deleting_same_role_twice_returns_404(self):
+        self.client.force_authenticate(user=self.admin)
+
+        first_response = self.client.delete(self.url)
+        second_response = self.client.delete(self.url)
+
+        self.assertEqual(first_response.status_code, 204)
+        self.assertEqual(second_response.status_code, 404)
+
+    # =====================================================
+    # DELETE: Protected roles
+    # =====================================================
+
+    def test_role_with_memberships_cannot_be_deleted(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.delete(self.protected_url)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.data["message"],
+            "Cannot delete a role that is currently in use.",
+        )
+
+        self.assertTrue(
+            Role.objects.filter(
+                id=self.nurse.id,
+            ).exists()
+        )
+
+    def test_protected_deletion_preserves_membership(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.delete(self.protected_url)
+
+        self.assertEqual(response.status_code, 409)
+
+        self.assertTrue(
+            DepartmentMembership.objects.filter(
+                id=self.membership.id,
+                role=self.nurse,
+            ).exists()
+        )
+
+        self.assertTrue(
+            Department.objects.filter(
+                id=self.emergency.id,
+            ).exists()
+        )
+
+        self.assertTrue(
+            get_user_model().objects.filter(
+                id=self.staff.id,
+            ).exists()
+        )
+
+    # =====================================================
+    # DELETE: Nonexistent role
+    # =====================================================
+
+    def test_delete_nonexistent_role_returns_404(self):
+        self.client.force_authenticate(user=self.admin)
+
+        url = reverse(
+            "role-detail",
+            kwargs={"role_id": 999999},
+        )
+
+        response = self.client.delete(url)
+
+        self.assertEqual(response.status_code, 404)
+
+    # =====================================================
+    # DELETE: Permissions
+    # =====================================================
+
+    def test_regular_staff_cannot_delete_role(self):
+        self.client.force_authenticate(user=self.staff)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.data["message"],
+            "Administrator access required.",
+        )
+
+        self.assertTrue(
+            Role.objects.filter(
+                id=self.doctor.id,
+            ).exists()
+        )
+
+    def test_unauthenticated_user_cannot_delete_role(self):
+        response = self.client.delete(self.url)
+
+        self.assertIn(response.status_code, [401, 403])
+
+        self.assertTrue(
+            Role.objects.filter(
+                id=self.doctor.id,
+            ).exists()
+        )
+
+    def test_pending_admin_cannot_delete_role(self):
+        self.admin.approval_status = "pending"
+        self.admin.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_rejected_admin_cannot_delete_role(self):
+        self.admin.approval_status = "rejected"
+        self.admin.save(update_fields=["approval_status"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_inactive_admin_cannot_delete_role(self):
+        self.admin.is_active = False
+        self.admin.save(update_fields=["is_active"])
+
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    # =====================================================
+    # DELETE: CSRF protection
+    # =====================================================
+
+    def test_delete_without_csrf_token_is_rejected(self):
+        client = APIClient(enforce_csrf_checks=True)
+        client.force_login(self.admin)
+
+        response = client.delete(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.assertTrue(
+            Role.objects.filter(
+                id=self.doctor.id,
+            ).exists()
+        )
+
+    def test_delete_with_valid_csrf_token_succeeds(self):
+        client = APIClient(enforce_csrf_checks=True)
+        client.force_login(self.admin)
+
+        client.get(reverse("csrf"))
+
+        self.assertIn("csrftoken", client.cookies)
+
+        csrf_token = client.cookies["csrftoken"].value
+
+        response = client.delete(
+            self.url,
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+
+        self.assertEqual(response.status_code, 204)
+
+        self.assertFalse(
+            Role.objects.filter(
+                id=self.doctor.id,
+            ).exists()
+        )
+
+    # =====================================================
+    # Unsupported HTTP methods
+    # =====================================================
+
+    def test_get_method_is_not_allowed(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 405)
+
+
+class RolePermissionModelTests(TestCase):
+
+    @classmethod
+    def setUpTestData(cls):
+        User = get_user_model()
+
+        cls.staff = User.objects.create_user(
+            email="staff@example.com",
+            name="Approved Staff",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        cls.nurse = Role.objects.create(
+            name="Nurse",
+            description="Provides nursing care.",
+        )
+
+        cls.coordinator = Role.objects.create(
+            name="Coordinator",
+            description="Coordinates departmental tasks.",
+        )
+
+        cls.emergency = Department.objects.create(
+            name="Emergency",
+        )
+
+    # =====================================================
+    # Creating permissions
+    # =====================================================
+
+    def test_can_create_role_permission(self):
+        permission = RolePermission.objects.create(
+            role=self.nurse,
+            codename="tasks.view",
+        )
+
+        self.assertIsNotNone(permission.id)
+        self.assertEqual(permission.role, self.nurse)
+        self.assertEqual(permission.codename, "tasks.view")
+
+        self.assertTrue(
+            RolePermission.objects.filter(
+                role=self.nurse,
+                codename="tasks.view",
+            ).exists()
+        )
+
+    def test_role_can_have_multiple_permissions(self):
+        RolePermission.objects.create(
+            role=self.coordinator,
+            codename="tasks.view",
+        )
+
+        RolePermission.objects.create(
+            role=self.coordinator,
+            codename="tasks.assign",
+        )
+
+        RolePermission.objects.create(
+            role=self.coordinator,
+            codename="tasks.reassign",
+        )
+
+        self.assertEqual(
+            RolePermission.objects.filter(
+                role=self.coordinator,
+            ).count(),
+            3,
+        )
+
+    def test_different_roles_can_share_same_permission(self):
+        RolePermission.objects.create(
+            role=self.nurse,
+            codename="tasks.view",
+        )
+
+        RolePermission.objects.create(
+            role=self.coordinator,
+            codename="tasks.view",
+        )
+
+        self.assertEqual(
+            RolePermission.objects.filter(
+                codename="tasks.view",
+            ).count(),
+            2,
+        )
+
+    # =====================================================
+    # UniqueConstraint
+    # =====================================================
+
+    def test_duplicate_role_permission_is_rejected(self):
+        RolePermission.objects.create(
+            role=self.coordinator,
+            codename="tasks.assign",
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                RolePermission.objects.create(
+                    role=self.coordinator,
+                    codename="tasks.assign",
+                )
+
+        self.assertEqual(
+            RolePermission.objects.filter(
+                role=self.coordinator,
+                codename="tasks.assign",
+            ).count(),
+            1,
+        )
+
+    # =====================================================
+    # String representation
+    # =====================================================
+
+    def test_role_permission_string_representation(self):
+        permission = RolePermission.objects.create(
+            role=self.coordinator,
+            codename="tasks.assign",
+        )
+
+        self.assertEqual(
+            str(permission),
+            "Coordinator - tasks.assign",
+        )
+
+    # =====================================================
+    # Reverse relationship
+    # =====================================================
+
+    def test_role_permissions_related_name(self):
+        permission1 = RolePermission.objects.create(
+            role=self.coordinator,
+            codename="tasks.view",
+        )
+
+        permission2 = RolePermission.objects.create(
+            role=self.coordinator,
+            codename="tasks.assign",
+        )
+
+        self.assertEqual(
+            self.coordinator.permissions.count(),
+            2,
+        )
+
+        self.assertIn(
+            permission1,
+            self.coordinator.permissions.all(),
+        )
+
+        self.assertIn(
+            permission2,
+            self.coordinator.permissions.all(),
+        )
+
+    # =====================================================
+    # CASCADE: Deleting an unused role
+    # =====================================================
+
+    def test_deleting_unused_role_deletes_permissions(self):
+        permission = RolePermission.objects.create(
+            role=self.coordinator,
+            codename="tasks.assign",
+        )
+
+        permission_id = permission.id
+        role_id = self.coordinator.id
+
+        self.coordinator.delete()
+
+        self.assertFalse(
+            Role.objects.filter(id=role_id).exists()
+        )
+
+        self.assertFalse(
+            RolePermission.objects.filter(
+                id=permission_id,
+            ).exists()
+        )
+
+    def test_cascade_preserves_other_roles_permissions(self):
+        RolePermission.objects.create(
+            role=self.coordinator,
+            codename="tasks.assign",
+        )
+
+        nurse_permission = RolePermission.objects.create(
+            role=self.nurse,
+            codename="tasks.view",
+        )
+
+        self.coordinator.delete()
+
+        self.assertTrue(
+            Role.objects.filter(
+                id=self.nurse.id,
+            ).exists()
+        )
+
+        self.assertTrue(
+            RolePermission.objects.filter(
+                id=nurse_permission.id,
+            ).exists()
+        )
+
+        self.assertEqual(
+            RolePermission.objects.count(),
+            1,
+        )
+
+    # =====================================================
+    # PROTECT: Role assigned to staff
+    # =====================================================
+
+    def test_cannot_delete_role_assigned_to_staff(self):
+        DepartmentMembership.objects.create(
+            user=self.staff,
+            department=self.emergency,
+            role=self.nurse,
+        )
+
+        with self.assertRaises(ProtectedError):
+            self.nurse.delete()
+
+        self.assertTrue(
+            Role.objects.filter(
+                id=self.nurse.id,
+            ).exists()
+        )
+
+    def test_protected_role_deletion_preserves_permissions(self):
+        membership = DepartmentMembership.objects.create(
+            user=self.staff,
+            department=self.emergency,
+            role=self.nurse,
+        )
+
+        permission = RolePermission.objects.create(
+            role=self.nurse,
+            codename="tasks.view",
+        )
+
+        with self.assertRaises(ProtectedError):
+            self.nurse.delete()
+
+        self.assertTrue(
+            Role.objects.filter(
+                id=self.nurse.id,
+            ).exists()
+        )
+
+        self.assertTrue(
+            RolePermission.objects.filter(
+                id=permission.id,
+            ).exists()
+        )
+
+        self.assertTrue(
+            DepartmentMembership.objects.filter(
+                id=membership.id,
+            ).exists()
+        )
+
+    # =====================================================
+    # Deleting a permission directly
+    # =====================================================
+
+    def test_deleting_permission_does_not_delete_role(self):
+        permission = RolePermission.objects.create(
+            role=self.coordinator,
+            codename="tasks.assign",
+        )
+
+        permission_id = permission.id
+
+        permission.delete()
+
+        self.assertFalse(
+            RolePermission.objects.filter(
+                id=permission_id,
+            ).exists()
+        )
+
+        self.assertTrue(
+            Role.objects.filter(
+                id=self.coordinator.id,
+            ).exists()
+        )

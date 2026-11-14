@@ -1,7 +1,9 @@
 from rest_framework import serializers
-from .models import User, Department, DepartmentMembership
+from .models import User, Department, DepartmentMembership, Role
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
+from .models import RolePermission
+from .permissions_catalog import ALLOWED_PERMISSIONS
 
 class RegisterSerializer(serializers.ModelSerializer):
     class Meta:
@@ -181,3 +183,33 @@ class DepartmentMembershipSerializer(serializers.ModelSerializer):
             "role",
         ]
         read_only_fields = ["id"]
+
+
+class RoleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Role
+        fields = [
+            "id",
+            "name",
+            "description",
+        ]
+        read_only_fields = ["id"]
+
+
+class RolePermissionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RolePermission
+        fields = [
+            "id",
+            "role",
+            "codename",
+        ]
+        read_only_fields = ["id"]
+
+    def validate_codename(self, value):
+        if value not in ALLOWED_PERMISSIONS:
+            raise serializers.ValidationError(
+                "Unsupported permission codename."
+            )
+
+        return value
