@@ -167,22 +167,42 @@ class PendingRegistrationsView(APIView):
     permission_classes = [IsApprovedUser]
 
     def get(self, request):
-        if request.user.is_superuser is False:
-            return Response(
-                data={
-                    "message": "Administrator access required."
-                },
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
+
         pending_users = User.objects.filter(
             approval_status="pending"
-        ).select_related(
-            "requested_department",
-            "requested_role"
+        )
+
+        if not request.user.is_superuser:
+
+            admin_departments = DepartmentMembership.objects.filter(
+                user=request.user,
+                role__name="Administrator"
+            ).values_list(
+                "department_id",
+                flat=True
             )
 
-        serializer = PendingRegistrationSerializer(pending_users, many=True)
+            if not admin_departments.exists():
+                return Response(
+                    data={
+                        "message": "Administrator access required."
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            pending_users = pending_users.filter(
+                requested_department_id__in=admin_departments
+            )
+
+        pending_users = pending_users.select_related(
+            "requested_department",
+            "requested_role"
+        )
+
+        serializer = PendingRegistrationSerializer(
+            pending_users,
+            many=True
+        )
 
         return Response(
             data=serializer.data,

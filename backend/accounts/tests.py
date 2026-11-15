@@ -11,6 +11,7 @@ from django.db import IntegrityError, transaction
 from django.db.models.deletion import ProtectedError
 from .models import Department, Role, DepartmentMembership, RolePermission
 from unittest.mock import patch
+from .permissions import can_manage_department
 
 
 class AuthenticationTests(APITestCase):
@@ -7213,3 +7214,634 @@ class RegistrationWorkflowIntegrationTests(TestCase):
             login_response.json()["error"],
             "Your registration request was rejected."
         )
+
+class DepartmentAdminPermissionTests(TestCase):
+
+    @classmethod
+    def setUpTestData(cls):
+        User = get_user_model()
+
+        # Departments
+        cls.emergency = Department.objects.create(
+            name="Emergency",
+        )
+
+        cls.cardiology = Department.objects.create(
+            name="Cardiology",
+        )
+
+        # Predefined roles
+        cls.administrator_role = Role.objects.get(
+            name="Administrator"
+        )
+
+        cls.nurse_role = Role.objects.get(
+            name="Nurse"
+        )
+
+        # Approved department administrator
+        cls.admin = User.objects.create_user(
+            email="admin@example.com",
+            password="StrongTestPassword123!",
+            name="Emergency Administrator",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        # Approved nurse
+        cls.nurse = User.objects.create_user(
+            email="nurse@example.com",
+            password="StrongTestPassword123!",
+            name="Emergency Nurse",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        # Pending administrator
+        cls.pending_admin = User.objects.create_user(
+            email="pending@example.com",
+            password="StrongTestPassword123!",
+            name="Pending Administrator",
+            approval_status="pending",
+            is_active=True,
+        )
+
+        # Rejected administrator
+        cls.rejected_admin = User.objects.create_user(
+            email="rejected@example.com",
+            password="StrongTestPassword123!",
+            name="Rejected Administrator",
+            approval_status="rejected",
+            is_active=True,
+        )
+
+        # Inactive administrator
+        cls.inactive_admin = User.objects.create_user(
+            email="inactive@example.com",
+            password="StrongTestPassword123!",
+            name="Inactive Administrator",
+            approval_status="approved",
+            is_active=False,
+        )
+
+        # System superuser
+        cls.superuser = User.objects.create_superuser(
+            email="superuser@example.com",
+            password="StrongTestPassword123!",
+            name="System Administrator",
+        )
+
+        # Department memberships
+        DepartmentMembership.objects.create(
+            user=cls.admin,
+            department=cls.emergency,
+            role=cls.administrator_role,
+        )
+
+        DepartmentMembership.objects.create(
+            user=cls.nurse,
+            department=cls.emergency,
+            role=cls.nurse_role,
+        )
+
+        DepartmentMembership.objects.create(
+            user=cls.pending_admin,
+            department=cls.emergency,
+            role=cls.administrator_role,
+        )
+
+        DepartmentMembership.objects.create(
+            user=cls.rejected_admin,
+            department=cls.emergency,
+            role=cls.administrator_role,
+        )
+
+        DepartmentMembership.objects.create(
+            user=cls.inactive_admin,
+            department=cls.emergency,
+            role=cls.administrator_role,
+        )
+
+    # 1. Administrator can manage their own department
+
+    def test_admin_can_manage_own_department(self):
+        result = can_manage_department(
+            self.admin,
+            self.emergency.id
+        )
+
+        self.assertTrue(result)
+
+    # 2. Administrator cannot manage another department
+
+    def test_admin_cannot_manage_other_department(self):
+        result = can_manage_department(
+            self.admin,
+            self.cardiology.id
+        )
+
+        self.assertFalse(result)
+
+    # 3. Regular nurse cannot manage a department
+
+    def test_nurse_cannot_manage_department(self):
+        result = can_manage_department(
+            self.nurse,
+            self.emergency.id
+        )
+
+        self.assertFalse(result)
+
+    # 4. Pending administrator cannot manage a department
+
+    def test_pending_admin_cannot_manage_department(self):
+        result = can_manage_department(
+            self.pending_admin,
+            self.emergency.id
+        )
+
+        self.assertFalse(result)
+
+    # 5. Rejected administrator cannot manage a department
+
+    def test_rejected_admin_cannot_manage_department(self):
+        result = can_manage_department(
+            self.rejected_admin,
+            self.emergency.id
+        )
+
+        self.assertFalse(result)
+
+    # 6. Inactive administrator cannot manage a department
+
+    def test_inactive_admin_cannot_manage_department(self):
+        result = can_manage_department(
+            self.inactive_admin,
+            self.emergency.id
+        )
+
+        self.assertFalse(result)
+
+    # 7. Anonymous user cannot manage a department
+
+    def test_anonymous_user_cannot_manage_department(self):
+        anonymous_user = AnonymousUser()
+
+        result = can_manage_department(
+            anonymous_user,
+            self.emergency.id
+        )
+
+        self.assertFalse(result)
+
+    # 8. None cannot manage a department
+
+    def test_none_user_cannot_manage_department(self):
+        result = can_manage_department(
+            None,
+            self.emergency.id
+        )
+
+        self.assertFalse(result)
+
+    # 9. Administrator can manage multiple assigned departments
+
+    def test_admin_can_manage_multiple_departments(self):
+        DepartmentMembership.objects.create(
+            user=self.admin,
+            department=self.cardiology,
+            role=self.administrator_role,
+        )
+
+        self.assertTrue(
+            can_manage_department(
+                self.admin,
+                self.emergency.id
+            )
+        )
+
+        self.assertTrue(
+            can_manage_department(
+                self.admin,
+                self.cardiology.id
+            )
+        )
+
+    # 10. System superuser without membership is not a department admin
+
+    def test_superuser_without_membership(self):
+        result = can_manage_department(
+            self.superuser,
+            self.emergency.id
+        )
+
+        self.assertFalse(result)
+
+    # 11. Administrator cannot manage a nonexistent department
+
+    def test_admin_cannot_manage_nonexistent_department(self):
+        result = can_manage_department(
+            self.admin,
+            999999
+        )
+
+        self.assertFalse(result)
+
+    # 12. Department Administrator does not need Django staff privileges
+
+    def test_department_admin_does_not_require_is_staff(self):
+        self.assertFalse(self.admin.is_staff)
+        self.assertFalse(self.admin.is_superuser)
+
+        result = can_manage_department(
+            self.admin,
+            self.emergency.id
+        )
+
+        self.assertTrue(result)
+    
+class DepartmentScopedPendingRegistrationsTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        User = get_user_model()
+
+        cls.url = "/api/auth/registrations/pending/"
+
+        # Predefined roles
+        cls.administrator_role = Role.objects.get(
+            name="Administrator"
+        )
+
+        cls.nurse_role = Role.objects.get(
+            name="Nurse"
+        )
+
+        # Departments
+        cls.emergency = Department.objects.create(
+            name="Emergency"
+        )
+
+        cls.cardiology = Department.objects.create(
+            name="Cardiology"
+        )
+
+        cls.neurology = Department.objects.create(
+            name="Neurology"
+        )
+
+        cls.oncology = Department.objects.create(
+            name="Oncology"
+        )
+
+        # Emergency administrator
+        cls.emergency_admin = User.objects.create_user(
+            email="emergency.admin@example.com",
+            password="StrongTestPassword123!",
+            name="Emergency Administrator",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        # Cardiology administrator
+        cls.cardiology_admin = User.objects.create_user(
+            email="cardiology.admin@example.com",
+            password="StrongTestPassword123!",
+            name="Cardiology Administrator",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        # Administrator of a department with no pending requests
+        cls.oncology_admin = User.objects.create_user(
+            email="oncology.admin@example.com",
+            password="StrongTestPassword123!",
+            name="Oncology Administrator",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        # Regular approved staff member
+        cls.nurse = User.objects.create_user(
+            email="nurse@example.com",
+            password="StrongTestPassword123!",
+            name="Approved Nurse",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        # Django staff user without Administrator role
+        cls.staff_user = User.objects.create_user(
+            email="staff@example.com",
+            password="StrongTestPassword123!",
+            name="Django Staff Member",
+            approval_status="approved",
+            is_active=True,
+            is_staff=True,
+        )
+
+        # Pending user with Administrator membership
+        cls.pending_admin = User.objects.create_user(
+            email="pending.admin@example.com",
+            password="StrongTestPassword123!",
+            name="Pending Administrator",
+            approval_status="pending",
+            is_active=True,
+        )
+
+        # System superuser
+        cls.superuser = User.objects.create_superuser(
+            email="superuser@example.com",
+            password="StrongTestPassword123!",
+            name="System Administrator",
+        )
+
+        # Department administrator memberships
+        DepartmentMembership.objects.create(
+            user=cls.emergency_admin,
+            department=cls.emergency,
+            role=cls.administrator_role,
+        )
+
+        DepartmentMembership.objects.create(
+            user=cls.cardiology_admin,
+            department=cls.cardiology,
+            role=cls.administrator_role,
+        )
+
+        DepartmentMembership.objects.create(
+            user=cls.oncology_admin,
+            department=cls.oncology,
+            role=cls.administrator_role,
+        )
+
+        DepartmentMembership.objects.create(
+            user=cls.pending_admin,
+            department=cls.emergency,
+            role=cls.administrator_role,
+        )
+
+        # Regular nurse membership
+        DepartmentMembership.objects.create(
+            user=cls.nurse,
+            department=cls.emergency,
+            role=cls.nurse_role,
+        )
+
+        # Pending registrations
+        cls.pending_emergency_1 = User.objects.create_user(
+            email="pending.emergency1@example.com",
+            password="StrongTestPassword123!",
+            name="Emergency Applicant 1",
+            requested_department=cls.emergency,
+            requested_role=cls.nurse_role,
+        )
+
+        cls.pending_emergency_2 = User.objects.create_user(
+            email="pending.emergency2@example.com",
+            password="StrongTestPassword123!",
+            name="Emergency Applicant 2",
+            requested_department=cls.emergency,
+            requested_role=cls.nurse_role,
+        )
+
+        cls.pending_cardiology = User.objects.create_user(
+            email="pending.cardiology@example.com",
+            password="StrongTestPassword123!",
+            name="Cardiology Applicant",
+            requested_department=cls.cardiology,
+            requested_role=cls.nurse_role,
+        )
+
+        cls.pending_neurology = User.objects.create_user(
+            email="pending.neurology@example.com",
+            password="StrongTestPassword123!",
+            name="Neurology Applicant",
+            requested_department=cls.neurology,
+            requested_role=cls.nurse_role,
+        )
+
+        # Approved applicant: must not appear in pending list
+        cls.approved_applicant = User.objects.create_user(
+            email="approved.applicant@example.com",
+            password="StrongTestPassword123!",
+            name="Approved Applicant",
+            requested_department=cls.emergency,
+            requested_role=cls.nurse_role,
+            approval_status="approved",
+            is_active=True,
+        )
+
+        # Rejected applicant: must not appear in pending list
+        cls.rejected_applicant = User.objects.create_user(
+            email="rejected.applicant@example.com",
+            password="StrongTestPassword123!",
+            name="Rejected Applicant",
+            requested_department=cls.emergency,
+            requested_role=cls.nurse_role,
+            approval_status="rejected",
+            is_active=False,
+        )
+
+    def setUp(self):
+        self.client = Client(enforce_csrf_checks=True)
+
+    # Helper: extract returned user IDs
+    def response_ids(self, response):
+        data = response.json()
+        ids = set()
+
+        index = 0
+
+        while index < len(data):
+            ids.add(data[index]["id"])
+            index += 1
+
+        return ids
+
+    # =====================================================
+    # Department-scoped access
+    # =====================================================
+
+    def test_emergency_admin_sees_only_emergency_requests(self):
+        self.client.force_login(self.emergency_admin)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+        expected_ids = {
+            self.pending_emergency_1.id,
+            self.pending_emergency_2.id,
+        }
+
+        self.assertEqual(
+            self.response_ids(response),
+            expected_ids,
+        )
+
+    def test_cardiology_admin_sees_only_cardiology_requests(self):
+        self.client.force_login(self.cardiology_admin)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(
+            self.response_ids(response),
+            {self.pending_cardiology.id},
+        )
+
+    def test_admin_can_see_multiple_managed_departments(self):
+        DepartmentMembership.objects.create(
+            user=self.emergency_admin,
+            department=self.cardiology,
+            role=self.administrator_role,
+        )
+
+        self.client.force_login(self.emergency_admin)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+        expected_ids = {
+            self.pending_emergency_1.id,
+            self.pending_emergency_2.id,
+            self.pending_cardiology.id,
+        }
+
+        self.assertEqual(
+            self.response_ids(response),
+            expected_ids,
+        )
+
+    def test_admin_with_no_pending_requests_gets_empty_list(self):
+        self.client.force_login(self.oncology_admin)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+    # =====================================================
+    # System superuser
+    # =====================================================
+
+    def test_superuser_sees_all_pending_registrations(self):
+        self.client.force_login(self.superuser)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+        expected_ids = {
+            self.pending_emergency_1.id,
+            self.pending_emergency_2.id,
+            self.pending_cardiology.id,
+            self.pending_neurology.id,
+            self.pending_admin.id,
+        }
+
+        self.assertEqual(
+            self.response_ids(response),
+            expected_ids,
+        )
+
+    # =====================================================
+    # Unauthorized access
+    # =====================================================
+
+    def test_regular_nurse_cannot_access_pending_registrations(self):
+        self.client.force_login(self.nurse)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.assertEqual(
+            response.json()["message"],
+            "Administrator access required.",
+        )
+
+    def test_is_staff_alone_does_not_grant_access(self):
+        self.client.force_login(self.staff_user)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+        self.assertEqual(
+            response.json()["message"],
+            "Administrator access required.",
+        )
+
+    def test_unauthenticated_user_cannot_access(self):
+        response = self.client.get(self.url)
+
+        self.assertIn(response.status_code, [401, 403])
+
+    def test_pending_administrator_cannot_access(self):
+        self.client.force_login(self.pending_admin)
+
+        response = self.client.get(self.url)
+
+        self.assertIn(response.status_code, [401, 403])
+
+    # =====================================================
+    # Response content
+    # =====================================================
+
+    def test_pending_list_excludes_approved_and_rejected_users(self):
+        self.client.force_login(self.superuser)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+        returned_ids = self.response_ids(response)
+
+        self.assertNotIn(
+            self.approved_applicant.id,
+            returned_ids,
+        )
+
+        self.assertNotIn(
+            self.rejected_applicant.id,
+            returned_ids,
+        )
+
+    def test_department_admin_does_not_need_is_staff(self):
+        self.assertFalse(self.emergency_admin.is_staff)
+        self.assertFalse(self.emergency_admin.is_superuser)
+
+        self.client.force_login(self.emergency_admin)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_response_contains_requested_department_information(self):
+        self.client.force_login(self.emergency_admin)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+        data = response.json()
+
+        self.assertEqual(len(data), 2)
+
+        index = 0
+
+        while index < len(data):
+            self.assertEqual(
+                data[index]["requested_department"],
+                self.emergency.id,
+            )
+
+            self.assertEqual(
+                data[index]["requested_department_name"],
+                "Emergency",
+            )
+
+            index += 1
