@@ -2,6 +2,7 @@ from django.contrib.auth.models import AbstractUser
 from django.db import models
 from .managers import UserManager
 
+
 class User(AbstractUser):
     APPROVAL_CHOICES = [
         ("approved", "Approved"),
@@ -15,9 +16,36 @@ class User(AbstractUser):
     email = models.EmailField(max_length=255, unique=True)
     avatar = models.CharField(max_length=500, null=True, blank=True)
     status = models.CharField(max_length=20, default="offline")
-    approval_status = models.CharField(max_length=10, choices=APPROVAL_CHOICES, default="pending")
-    phone_number = models.CharField(max_length=20, blank=True, default="")
+
+    approval_status = models.CharField(
+        max_length=10,
+        choices=APPROVAL_CHOICES,
+        default="pending"
+    )
+
+    phone_number = models.CharField(
+        max_length=20,
+        blank=True,
+        default=""
+    )
+
     show_phone_number = models.BooleanField(default=False)
+
+    requested_department = models.ForeignKey(
+        "Department",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="registration_requests"
+    )
+
+    requested_role = models.ForeignKey(
+        "Role",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="registration_requests"
+    )
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = ["name"]
@@ -26,7 +54,6 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.email
-
 
 class Department(models.Model):
     name = models.CharField(

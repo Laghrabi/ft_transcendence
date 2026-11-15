@@ -15,6 +15,7 @@ from .permissions import IsApprovedUser
 from .serializers import StaffListSerializer, AdminStaffUpdateSerializer, AdminStaffListSerializer, DepartmentSerializer
 from django.db.models.deletion import ProtectedError
 from .serializers import DepartmentMembershipSerializer, RoleSerializer
+from django.db import transaction
 
 @method_decorator(csrf_protect, name="dispatch")
 class LoginView(APIView):
@@ -173,8 +174,14 @@ class PendingRegistrationsView(APIView):
                 },
                 status=status.HTTP_403_FORBIDDEN
             )
+        
+        pending_users = User.objects.filter(
+            approval_status="pending"
+        ).select_related(
+            "requested_department",
+            "requested_role"
+            )
 
-        pending_users = User.objects.filter(approval_status="pending")
         serializer = PendingRegistrationSerializer(pending_users, many=True)
 
         return Response(
@@ -182,32 +189,74 @@ class PendingRegistrationsView(APIView):
             status=status.HTTP_200_OK
         )
 
+
 @method_decorator(csrf_protect, name="dispatch")
 class ApproveRegistrationView(APIView):
+    """
+    Approve a pending registration and create its department membership.
+
+    Only approved administrators can approve registrations.
+    """
+
     permission_classes = [IsApprovedUser]
 
     def post(self, request, user_id):
-        if request.user.is_superuser is False:
+        if not request.user.is_superuser:
             return Response(
-                data={
-                    "message": "Administrator access required."
-                },
+                data={"message": "Administrator access required."},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
-        user = get_object_or_404(User, id=user_id)
 
-        if user.approval_status != "pending":
-            return Response(
-                data={
-                    "message": "Only pending registrations can be approved."
-                },
-                status=status.HTTP_409_CONFLICT
+        with transaction.atomic():
+            user = get_object_or_404(
+                User.objects.select_for_update(),
+                id=user_id
             )
-        
-        user.approval_status = "approved"
-        user.is_active = True
-        user.save(update_fields=["approval_status", "is_active"])
+
+            if user.approval_status != "pending":
+                return Response(
+                    data={
+                        "message": "Only pending registrations can be approved."
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            if (
+                user.requested_department_id is None
+                or user.requested_role_id is None
+            ):
+                return Response(
+                    data={
+                        "message": (
+                            "Registration must have a requested "
+                            "department and role before approval."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if DepartmentMembership.objects.filter(user=user).exists():
+                return Response(
+                    data={
+                        "message": (
+                            "This user already has a department membership."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            DepartmentMembership.objects.create(
+                user=user,
+                department_id=user.requested_department_id,
+                role_id=user.requested_role_id
+            )
+
+            user.approval_status = "approved"
+            user.is_active = True
+
+            user.save(
+                update_fields=["approval_status", "is_active"]
+            )
 
         return Response(
             data={
@@ -215,7 +264,6 @@ class ApproveRegistrationView(APIView):
             },
             status=status.HTTP_200_OK
         )
-
 
 @method_decorator(csrf_protect, name="dispatch")
 class RejectRegistrationView(APIView):
@@ -410,16 +458,28 @@ class ActivateStaffView(APIView):
             data={"message": "Staff account activated successfully."}, status=status.HTTP_200_OK)
 
 
+
 @method_decorator(csrf_protect, name="dispatch")
 class DepartmentListCreateView(APIView):
     """
     Manage department listing and creation.
 
-    Approved users can retrieve all departments ordered by ID.
-    Only administrators can create new departments.
+    Anyone can retrieve departments ordered by ID.
+    Only approved administrators can create departments.
     """
 
     permission_classes = [IsApprovedUser]
+
+    def get_permissions(self):
+        """
+        Allow public GET requests.
+
+        Require an approved user for other methods.
+        """
+        if self.request.method == "GET":
+            return [AllowAny()]
+
+        return super().get_permissions()
 
     def get(self, request):
         """Return a list of all departments ordered by ID."""
@@ -437,7 +497,9 @@ class DepartmentListCreateView(APIView):
         )
 
     def post(self, request):
-        """Validate and create a new department with administrator privileges."""
+        """
+        Allow approved administrators to create departments.
+        """
 
         if not request.user.is_superuser:
             return Response(
@@ -680,92 +742,20 @@ class DepartmentMembershipDetailView(APIView):
             status=status.HTTP_204_NO_CONTENT
         )
 
-
 @method_decorator(csrf_protect, name="dispatch")
 class RoleListCreateView(APIView):
-    permission_classes = [IsApprovedUser]
+    permission_classes = [AllowAny]
 
     def get(self, request):
-        roles = Role.objects.all().order_by("id")
+        roles = Role.objects.filter(
+            name__in=["Nurse", "Doctor"]
+        ).order_by("id")
 
-        serializer = RoleSerializer(
-            roles,
-            many=True
-        )
-
-        return Response(
-            serializer.data,
-            status=status.HTTP_200_OK
-        )
-
-    def post(self, request):
-        if not request.user.is_superuser:
-            return Response(
-                data={"message": "Administrator access required."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-        serializer = RoleSerializer(
-            data=request.data
-        )
-
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-
-        return Response(
-            serializer.data,
-            status=status.HTTP_201_CREATED
-        )
-
-
-@method_decorator(csrf_protect, name="dispatch")
-class RoleDetailView(APIView):
-    permission_classes = [IsApprovedUser]
-
-    def patch(self, request, role_id):
-        if not request.user.is_superuser:
-            return Response(
-                data={"message": "Administrator access required."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-        role = get_object_or_404(Role, id=role_id)
-
-        serializer = RoleSerializer(
-            role,
-            data=request.data,
-            partial=True
-        )
-
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
+        serializer = RoleSerializer(roles, many=True)
 
         return Response(
             serializer.data,
             status=status.HTTP_200_OK
-        )
-
-    def delete(self, request, role_id):
-        if not request.user.is_superuser:
-            return Response(
-                data={"message": "Administrator access required."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-        role = get_object_or_404(Role, id=role_id)
-
-        try:
-            role.delete()
-        except ProtectedError:
-            return Response(
-                data={
-                    "message": "Cannot delete a role that is currently in use."
-                },
-                status=status.HTTP_409_CONFLICT
-            )
-
-        return Response(
-            status=status.HTTP_204_NO_CONTENT
         )
 
 @require_GET

@@ -5,4 +5,5 @@ ALLOWED_PERMISSIONS = frozenset({
     "tasks.reassign",
     "tasks.update_assigned",
     "tasks.cancel",
+    "tasks.complete",
 })

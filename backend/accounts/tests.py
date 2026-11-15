@@ -10,6 +10,7 @@ from django.urls import reverse
 from django.db import IntegrityError, transaction
 from django.db.models.deletion import ProtectedError
 from .models import Department, Role, DepartmentMembership, RolePermission
+from unittest.mock import patch
 
 
 class AuthenticationTests(APITestCase):
@@ -242,7 +243,6 @@ class UserManagerTests(TestCase):
             )
 
 
-
 class RegistrationTests(TestCase):
 
     def setUp(self):
@@ -253,13 +253,24 @@ class RegistrationTests(TestCase):
         self.login_url = "/api/auth/login/"
         self.csrf_url = "/api/auth/csrf/"
 
+        self.emergency = Department.objects.create(
+            name="Emergency",
+            description="Emergency medical services",
+        )
+
+        self.nurse = Role.objects.get(name="Nurse")
+
         self.valid_data = {
             "name": "Sara",
             "email": "sara.new@example.com",
-            "password": "SecurePassword123!"
+            "password": "SecurePassword123!",
+            "requested_department": self.emergency.id,
+            "requested_role": self.nurse.id,
         }
 
+    # =====================================================
     # Helpers
+    # =====================================================
 
     def get_csrf_token(self):
         response = self.client.get(self.csrf_url)
@@ -290,13 +301,15 @@ class RegistrationTests(TestCase):
             self.login_url,
             data=json.dumps({
                 "email": email,
-                "password": password
+                "password": password,
             }),
             content_type="application/json",
-            HTTP_X_CSRFTOKEN=self.get_csrf_token()
+            HTTP_X_CSRFTOKEN=self.get_csrf_token(),
         )
 
+    # =====================================================
     # 1. Successful registration
+    # =====================================================
 
     def test_successful_registration(self):
         response = self.register()
@@ -313,7 +326,18 @@ class RegistrationTests(TestCase):
         self.assertFalse(user.is_staff)
         self.assertFalse(user.is_superuser)
 
+        self.assertEqual(
+            user.requested_department,
+            self.emergency
+        )
+
+        self.assertEqual(
+            user.requested_role,
+            self.nurse
+        )
+
         self.assertEqual(response.json()["id"], user.id)
+
         self.assertEqual(
             response.json()["message"],
             "Registration successful. Awaiting administrator approval."
@@ -321,7 +345,27 @@ class RegistrationTests(TestCase):
 
         self.assertEqual(self.User.objects.count(), 1)
 
+    def test_registration_does_not_create_membership(self):
+        response = self.register()
+
+        self.assertEqual(response.status_code, 201)
+
+        user = self.User.objects.get(
+            email=self.valid_data["email"]
+        )
+
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=user
+            ).exists()
+        )
+
+        self.assertEqual(user.approval_status, "pending")
+        self.assertFalse(user.is_active)
+
+    # =====================================================
     # 2. Password security
+    # =====================================================
 
     def test_password_is_hashed(self):
         response = self.register()
@@ -351,16 +395,20 @@ class RegistrationTests(TestCase):
         )
 
         self.assertNotIn("password", response.json())
+
         self.assertNotIn(
             self.valid_data["password"],
             response.content.decode()
         )
+
         self.assertNotIn(
             user.password,
             response.content.decode()
         )
 
+    # =====================================================
     # 3. Prevent privilege escalation
+    # =====================================================
 
     def test_client_cannot_assign_admin_privileges(self):
         data = self.valid_data.copy()
@@ -369,7 +417,7 @@ class RegistrationTests(TestCase):
             "is_active": True,
             "is_staff": True,
             "is_superuser": True,
-            "approval_status": "approved"
+            "approval_status": "approved",
         })
 
         response = self.register(data)
@@ -385,7 +433,24 @@ class RegistrationTests(TestCase):
         self.assertFalse(user.is_superuser)
         self.assertEqual(user.approval_status, "pending")
 
+    def test_administrator_role_cannot_be_requested(self):
+        admin_role = Role.objects.create(
+            name="Hospital Administrator",
+            description="Reserved administrator role.",
+        )
+
+        data = self.valid_data.copy()
+        data["requested_role"] = admin_role.id
+
+        response = self.register(data)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("requested_role", response.json())
+        self.assertEqual(self.User.objects.count(), 0)
+
+    # =====================================================
     # 4. Login restrictions
+    # =====================================================
 
     def test_pending_user_cannot_login(self):
         response = self.register()
@@ -397,10 +462,8 @@ class RegistrationTests(TestCase):
             self.valid_data["password"]
         )
 
-        # UPDATED: Pending accounts return 403 instead of 401
         self.assertEqual(login_response.status_code, 403)
 
-        # NEW: Verify the correct error message
         self.assertEqual(
             login_response.json()["error"],
             "Your account is awaiting administrator approval."
@@ -446,16 +509,16 @@ class RegistrationTests(TestCase):
             self.valid_data["password"]
         )
 
-        # UPDATED: Pending accounts return 403 instead of 401
         self.assertEqual(login_response.status_code, 403)
 
-        # NEW: Verify the correct error message
         self.assertEqual(
             login_response.json()["error"],
-        "Your account is awaiting administrator approval."
+            "Your account is awaiting administrator approval."
         )
 
+    # =====================================================
     # 5. Email validation
+    # =====================================================
 
     def test_duplicate_email_is_rejected(self):
         first_response = self.register()
@@ -478,10 +541,19 @@ class RegistrationTests(TestCase):
         self.assertIn("email", response.json())
         self.assertEqual(self.User.objects.count(), 0)
 
+    # =====================================================
     # 6. Required fields
+    # =====================================================
 
     def test_missing_required_fields_are_rejected(self):
-        fields = ("name", "email", "password")
+        fields = (
+            "name",
+            "email",
+            "password",
+            "requested_department",
+            "requested_role",
+        )
+
         index = 0
 
         while index < len(fields):
@@ -500,7 +572,14 @@ class RegistrationTests(TestCase):
             index += 1
 
     def test_blank_required_fields_are_rejected(self):
-        fields = ("name", "email", "password")
+        fields = (
+            "name",
+            "email",
+            "password",
+            "requested_department",
+            "requested_role",
+        )
+
         index = 0
 
         while index < len(fields):
@@ -518,7 +597,77 @@ class RegistrationTests(TestCase):
 
             index += 1
 
-    # 7. Password validation
+    # =====================================================
+    # 7. Department validation
+    # =====================================================
+
+    def test_nonexistent_department_is_rejected(self):
+        data = self.valid_data.copy()
+        data["requested_department"] = 999999
+
+        response = self.register(data)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("requested_department", response.json())
+        self.assertEqual(self.User.objects.count(), 0)
+
+    def test_invalid_department_type_is_rejected(self):
+        data = self.valid_data.copy()
+        data["requested_department"] = "not-an-id"
+
+        response = self.register(data)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("requested_department", response.json())
+        self.assertEqual(self.User.objects.count(), 0)
+
+    def test_null_department_is_rejected(self):
+        data = self.valid_data.copy()
+        data["requested_department"] = None
+
+        response = self.register(data)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("requested_department", response.json())
+        self.assertEqual(self.User.objects.count(), 0)
+
+    # =====================================================
+    # 8. Role validation
+    # =====================================================
+
+    def test_nonexistent_role_is_rejected(self):
+        data = self.valid_data.copy()
+        data["requested_role"] = 999999
+
+        response = self.register(data)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("requested_role", response.json())
+        self.assertEqual(self.User.objects.count(), 0)
+
+    def test_invalid_role_type_is_rejected(self):
+        data = self.valid_data.copy()
+        data["requested_role"] = "not-an-id"
+
+        response = self.register(data)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("requested_role", response.json())
+        self.assertEqual(self.User.objects.count(), 0)
+
+    def test_null_role_is_rejected(self):
+        data = self.valid_data.copy()
+        data["requested_role"] = None
+
+        response = self.register(data)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("requested_role", response.json())
+        self.assertEqual(self.User.objects.count(), 0)
+
+    # =====================================================
+    # 9. Password validation
+    # =====================================================
 
     @override_settings(
         AUTH_PASSWORD_VALIDATORS=[
@@ -547,7 +696,7 @@ class RegistrationTests(TestCase):
         weak_passwords = (
             "abc",
             "123456789",
-            "sara.new@example.com"
+            "sara.new@example.com",
         )
 
         index = 0
@@ -567,7 +716,9 @@ class RegistrationTests(TestCase):
 
             index += 1
 
-    # 8. CSRF protection
+    # =====================================================
+    # 10. CSRF protection
+    # =====================================================
 
     def test_registration_without_csrf_is_rejected(self):
         response = self.register(include_csrf=False)
@@ -596,13 +747,16 @@ class RegistrationTests(TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(self.User.objects.count(), 0)
 
-    # 9. HTTP method restrictions
+    # =====================================================
+    # 11. HTTP method restrictions
+    # =====================================================
 
     def test_get_registration_is_not_allowed(self):
         response = self.client.get(self.register_url)
 
         self.assertEqual(response.status_code, 405)
         self.assertEqual(self.User.objects.count(), 0)
+
 
 
 class PendingRegistrationsTests(TestCase):
@@ -612,6 +766,20 @@ class PendingRegistrationsTests(TestCase):
         User = get_user_model()
 
         cls.pending_url = "/api/auth/registrations/pending/"
+
+        cls.emergency = Department.objects.create(
+            name="Emergency",
+            description="Emergency medical services",
+        )
+
+        cls.cardiology = Department.objects.create(
+            name="Cardiology",
+            description="Heart-related medical services",
+        )
+
+        cls.nurse_role = Role.objects.get(name="Nurse")
+
+        cls.doctor_role = Role.objects.get(name="Doctor")
 
         cls.admin = User.objects.create_superuser(
             email="admin@example.com",
@@ -639,13 +807,17 @@ class PendingRegistrationsTests(TestCase):
         cls.pending_sara = User.objects.create_user(
             email="sara@example.com",
             password="Sara123!Test",
-            name="Sara"
+            name="Sara",
+            requested_department=cls.emergency,
+            requested_role=cls.nurse_role,
         )
 
         cls.pending_lina = User.objects.create_user(
             email="lina@example.com",
             password="Lina123!Test",
-            name="Lina"
+            name="Lina",
+            requested_department=cls.cardiology,
+            requested_role=cls.doctor_role,
         )
 
         cls.rejected_user = User.objects.create_user(
@@ -658,7 +830,9 @@ class PendingRegistrationsTests(TestCase):
     def setUp(self):
         self.client = Client(enforce_csrf_checks=True)
 
+    # =====================================================
     # 1. Administrator can access the endpoint
+    # =====================================================
 
     def test_admin_can_list_pending_registrations(self):
         self.client.force_login(self.admin)
@@ -668,7 +842,9 @@ class PendingRegistrationsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIsInstance(response.json(), list)
 
+    # =====================================================
     # 2. Only pending registrations are returned
+    # =====================================================
 
     def test_only_pending_users_are_returned(self):
         self.client.force_login(self.admin)
@@ -692,7 +868,9 @@ class PendingRegistrationsTests(TestCase):
 
         self.assertEqual(received_ids, expected_ids)
 
-    # 3. Response contains only permitted fields
+    # =====================================================
+    # 3. Response contains permitted fields
+    # =====================================================
 
     def test_pending_list_excludes_sensitive_fields(self):
         self.client.force_login(self.admin)
@@ -709,7 +887,11 @@ class PendingRegistrationsTests(TestCase):
             "id",
             "name",
             "email",
-            "approval_status"
+            "approval_status",
+            "requested_department",
+            "requested_department_name",
+            "requested_role",
+            "requested_role_name",
         }
 
         index = 0
@@ -718,13 +900,132 @@ class PendingRegistrationsTests(TestCase):
                 set(data[index].keys()),
                 expected_fields
             )
+
             self.assertEqual(
                 data[index]["approval_status"],
                 "pending"
             )
+
+            self.assertNotIn("password", data[index])
+            self.assertNotIn("is_superuser", data[index])
+            self.assertNotIn("is_staff", data[index])
+
             index += 1
 
-    # 4. Regular authenticated users cannot access
+    # =====================================================
+    # 4. Requested department and role are returned
+    # =====================================================
+
+    def test_pending_users_include_requested_department_and_role(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.get(self.pending_url)
+
+        self.assertEqual(response.status_code, 200)
+
+        data = response.json()
+        registrations = {}
+
+        index = 0
+        while index < len(data):
+            registrations[data[index]["id"]] = data[index]
+            index += 1
+
+        sara_data = registrations[self.pending_sara.id]
+
+        self.assertEqual(
+            sara_data["requested_department"],
+            self.emergency.id
+        )
+
+        self.assertEqual(
+            sara_data["requested_department_name"],
+            "Emergency"
+        )
+
+        self.assertEqual(
+            sara_data["requested_role"],
+            self.nurse_role.id
+        )
+
+        self.assertEqual(
+            sara_data["requested_role_name"],
+            "Nurse"
+        )
+
+        lina_data = registrations[self.pending_lina.id]
+
+        self.assertEqual(
+            lina_data["requested_department"],
+            self.cardiology.id
+        )
+
+        self.assertEqual(
+            lina_data["requested_department_name"],
+            "Cardiology"
+        )
+
+        self.assertEqual(
+            lina_data["requested_role"],
+            self.doctor_role.id
+        )
+
+        self.assertEqual(
+            lina_data["requested_role_name"],
+            "Doctor"
+        )
+
+    # =====================================================
+    # 5. Older registrations with missing choices
+    # =====================================================
+
+    def test_pending_user_without_department_or_role(self):
+        User = get_user_model()
+
+        old_user = User.objects.create_user(
+            email="old@example.com",
+            password="OldUser123!Test",
+            name="Old Pending User",
+        )
+
+        self.client.force_login(self.admin)
+
+        response = self.client.get(self.pending_url)
+
+        self.assertEqual(response.status_code, 200)
+
+        data = response.json()
+        old_user_data = None
+
+        index = 0
+        while index < len(data):
+            if data[index]["id"] == old_user.id:
+                old_user_data = data[index]
+                break
+
+            index += 1
+
+        self.assertIsNotNone(old_user_data)
+
+        self.assertIsNone(
+            old_user_data["requested_department"]
+        )
+
+        self.assertIsNone(
+            old_user_data["requested_department_name"]
+        )
+
+        self.assertIsNone(
+            old_user_data["requested_role"]
+        )
+
+        self.assertIsNone(
+            old_user_data["requested_role_name"]
+        )
+
+    # =====================================================
+    # 6. Regular users cannot access
+    # =====================================================
 
     def test_regular_user_cannot_list_pending_registrations(self):
         self.client.force_login(self.nurse)
@@ -732,12 +1033,15 @@ class PendingRegistrationsTests(TestCase):
         response = self.client.get(self.pending_url)
 
         self.assertEqual(response.status_code, 403)
+
         self.assertEqual(
             response.json()["message"],
             "Administrator access required."
         )
 
-    # 5. is_staff alone does not grant administrator access
+    # =====================================================
+    # 7. is_staff alone does not grant administrator access
+    # =====================================================
 
     def test_staff_user_without_superuser_cannot_access(self):
         self.client.force_login(self.staff_user)
@@ -745,19 +1049,24 @@ class PendingRegistrationsTests(TestCase):
         response = self.client.get(self.pending_url)
 
         self.assertEqual(response.status_code, 403)
+
         self.assertEqual(
             response.json()["message"],
             "Administrator access required."
         )
 
-    # 6. Unauthenticated users cannot access
+    # =====================================================
+    # 8. Unauthenticated users cannot access
+    # =====================================================
 
     def test_unauthenticated_user_cannot_access(self):
         response = self.client.get(self.pending_url)
 
         self.assertIn(response.status_code, [401, 403])
 
-    # 7. Empty pending list returns an empty array
+    # =====================================================
+    # 9. Empty pending list returns an empty array
+    # =====================================================
 
     def test_empty_pending_registrations(self):
         User = get_user_model()
@@ -774,11 +1083,21 @@ class PendingRegistrationsTests(TestCase):
         self.assertEqual(response.json(), [])
 
 
+
 class ApproveRegistrationTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
         User = get_user_model()
+
+        cls.emergency = Department.objects.create(
+            name="Emergency",
+            description="Emergency medical services",
+        )
+
+        cls.nurse_role = Role.objects.get(
+            name="Nurse"
+        )
 
         cls.admin = User.objects.create_superuser(
             email="admin@example.com",
@@ -806,7 +1125,9 @@ class ApproveRegistrationTests(TestCase):
         cls.pending_user = User.objects.create_user(
             email="sara@example.com",
             password="Sara123!Test",
-            name="Sara"
+            name="Sara",
+            requested_department=cls.emergency,
+            requested_role=cls.nurse_role
         )
 
         cls.approved_user = User.objects.create_user(
@@ -828,7 +1149,9 @@ class ApproveRegistrationTests(TestCase):
     def setUp(self):
         self.client = Client(enforce_csrf_checks=True)
 
+    # =====================================================
     # Helpers
+    # =====================================================
 
     def approval_url(self, user_id):
         return f"/api/auth/registrations/{user_id}/approve/"
@@ -849,7 +1172,9 @@ class ApproveRegistrationTests(TestCase):
             **headers
         )
 
+    # =====================================================
     # 1. Successful approval
+    # =====================================================
 
     def test_admin_can_approve_pending_registration(self):
         self.client.force_login(self.admin)
@@ -857,6 +1182,7 @@ class ApproveRegistrationTests(TestCase):
         response = self.approve(self.pending_user.id)
 
         self.assertEqual(response.status_code, 200)
+
         self.assertEqual(
             response.json()["message"],
             "Registration approved successfully."
@@ -870,7 +1196,59 @@ class ApproveRegistrationTests(TestCase):
         )
         self.assertTrue(self.pending_user.is_active)
 
-    # 2. Approved user can log in
+        self.assertFalse(self.pending_user.is_staff)
+        self.assertFalse(self.pending_user.is_superuser)
+
+    # =====================================================
+    # 2. Approval creates the correct membership
+    # =====================================================
+
+    def test_approval_creates_department_membership(self):
+        self.client.force_login(self.admin)
+
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).exists()
+        )
+
+        response = self.approve(self.pending_user.id)
+
+        self.assertEqual(response.status_code, 200)
+
+        memberships = DepartmentMembership.objects.filter(
+            user=self.pending_user
+        )
+
+        self.assertEqual(memberships.count(), 1)
+
+        membership = memberships.get()
+
+        self.assertEqual(
+            membership.department,
+            self.emergency
+        )
+
+        self.assertEqual(
+            membership.role,
+            self.nurse_role
+        )
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.requested_department,
+            self.emergency
+        )
+
+        self.assertEqual(
+            self.pending_user.requested_role,
+            self.nurse_role
+        )
+
+    # =====================================================
+    # 3. Approved user can log in
+    # =====================================================
 
     def test_approved_user_can_login_after_approval(self):
         self.client.force_login(self.admin)
@@ -892,7 +1270,9 @@ class ApproveRegistrationTests(TestCase):
 
         self.assertEqual(login_response.status_code, 200)
 
-    # 3. Regular user cannot approve
+    # =====================================================
+    # 4. Regular user cannot approve
+    # =====================================================
 
     def test_regular_user_cannot_approve(self):
         self.client.force_login(self.nurse)
@@ -900,6 +1280,7 @@ class ApproveRegistrationTests(TestCase):
         response = self.approve(self.pending_user.id)
 
         self.assertEqual(response.status_code, 403)
+
         self.assertEqual(
             response.json()["message"],
             "Administrator access required."
@@ -913,7 +1294,15 @@ class ApproveRegistrationTests(TestCase):
         )
         self.assertFalse(self.pending_user.is_active)
 
-    # 4. is_staff alone is not enough
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).exists()
+        )
+
+    # =====================================================
+    # 5. is_staff alone is not enough
+    # =====================================================
 
     def test_staff_user_cannot_approve(self):
         self.client.force_login(self.staff_user)
@@ -929,7 +1318,15 @@ class ApproveRegistrationTests(TestCase):
             "pending"
         )
 
-    # 5. Unauthenticated users cannot approve
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).exists()
+        )
+
+    # =====================================================
+    # 6. Unauthenticated users cannot approve
+    # =====================================================
 
     def test_unauthenticated_user_cannot_approve(self):
         response = self.approve(self.pending_user.id)
@@ -944,7 +1341,15 @@ class ApproveRegistrationTests(TestCase):
         )
         self.assertFalse(self.pending_user.is_active)
 
-    # 6. Nonexistent user returns 404
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).exists()
+        )
+
+    # =====================================================
+    # 7. Nonexistent user returns 404
+    # =====================================================
 
     def test_approve_nonexistent_user(self):
         self.client.force_login(self.admin)
@@ -953,7 +1358,9 @@ class ApproveRegistrationTests(TestCase):
 
         self.assertEqual(response.status_code, 404)
 
-    # 7. Already approved user returns 409
+    # =====================================================
+    # 8. Already approved user returns 409
+    # =====================================================
 
     def test_cannot_approve_already_approved_user(self):
         self.client.force_login(self.admin)
@@ -961,6 +1368,7 @@ class ApproveRegistrationTests(TestCase):
         response = self.approve(self.approved_user.id)
 
         self.assertEqual(response.status_code, 409)
+
         self.assertEqual(
             response.json()["message"],
             "Only pending registrations can be approved."
@@ -973,7 +1381,9 @@ class ApproveRegistrationTests(TestCase):
             "approved"
         )
 
-    # 8. Rejected user cannot be approved
+    # =====================================================
+    # 9. Rejected user cannot be approved
+    # =====================================================
 
     def test_cannot_approve_rejected_user(self):
         self.client.force_login(self.admin)
@@ -990,7 +1400,15 @@ class ApproveRegistrationTests(TestCase):
         )
         self.assertFalse(self.rejected_user.is_active)
 
-    # 9. Approving twice returns 409
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.rejected_user
+            ).exists()
+        )
+
+    # =====================================================
+    # 10. Approving twice returns 409
+    # =====================================================
 
     def test_cannot_approve_same_user_twice(self):
         self.client.force_login(self.admin)
@@ -1009,7 +1427,152 @@ class ApproveRegistrationTests(TestCase):
         )
         self.assertTrue(self.pending_user.is_active)
 
-    # 10. Missing CSRF token returns 403
+        self.assertEqual(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).count(),
+            1
+        )
+
+    # =====================================================
+    # 11. Missing requested department
+    # =====================================================
+
+    def test_cannot_approve_without_requested_department(self):
+        self.pending_user.requested_department = None
+        self.pending_user.save(
+            update_fields=["requested_department"]
+        )
+
+        self.client.force_login(self.admin)
+
+        response = self.approve(self.pending_user.id)
+
+        self.assertEqual(response.status_code, 400)
+
+        self.assertEqual(
+            response.json()["message"],
+            (
+                "Registration must have a requested "
+                "department and role before approval."
+            )
+        )
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "pending"
+        )
+        self.assertFalse(self.pending_user.is_active)
+
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).exists()
+        )
+
+    # =====================================================
+    # 12. Missing requested role
+    # =====================================================
+
+    def test_cannot_approve_without_requested_role(self):
+        self.pending_user.requested_role = None
+        self.pending_user.save(
+            update_fields=["requested_role"]
+        )
+
+        self.client.force_login(self.admin)
+
+        response = self.approve(self.pending_user.id)
+
+        self.assertEqual(response.status_code, 400)
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "pending"
+        )
+        self.assertFalse(self.pending_user.is_active)
+
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).exists()
+        )
+
+    # =====================================================
+    # 13. Existing membership prevents approval
+    # =====================================================
+
+    def test_cannot_approve_user_with_existing_membership(self):
+        DepartmentMembership.objects.create(
+            user=self.pending_user,
+            department=self.emergency,
+            role=self.nurse_role
+        )
+
+        self.client.force_login(self.admin)
+
+        response = self.approve(self.pending_user.id)
+
+        self.assertEqual(response.status_code, 409)
+
+        self.assertEqual(
+            response.json()["message"],
+            "This user already has a department membership."
+        )
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "pending"
+        )
+        self.assertFalse(self.pending_user.is_active)
+
+        self.assertEqual(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).count(),
+            1
+        )
+
+    # =====================================================
+    # 14. Transaction rollback on save failure
+    # =====================================================
+
+    def test_approval_rolls_back_if_user_save_fails(self):
+        self.client.force_login(self.admin)
+
+        with patch(
+            "accounts.views.User.save",
+            side_effect=RuntimeError("Simulated save failure")
+        ):
+            with self.assertRaisesMessage(
+                RuntimeError,
+                "Simulated save failure"
+            ):
+                self.approve(self.pending_user.id)
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "pending"
+        )
+        self.assertFalse(self.pending_user.is_active)
+
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).exists()
+        )
+
+    # =====================================================
+    # 15. Missing CSRF token returns 403
+    # =====================================================
 
     def test_approval_requires_csrf(self):
         self.client.force_login(self.admin)
@@ -1029,7 +1592,15 @@ class ApproveRegistrationTests(TestCase):
             "pending"
         )
 
-    # 11. Invalid CSRF token returns 403
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).exists()
+        )
+
+    # =====================================================
+    # 16. Invalid CSRF token returns 403
+    # =====================================================
 
     def test_invalid_csrf_token_is_rejected(self):
         self.client.force_login(self.admin)
@@ -1049,7 +1620,15 @@ class ApproveRegistrationTests(TestCase):
             "pending"
         )
 
-    # 12. GET requests are not allowed
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).exists()
+        )
+
+    # =====================================================
+    # 17. GET requests are not allowed
+    # =====================================================
 
     def test_get_request_is_not_allowed(self):
         self.client.force_login(self.admin)
@@ -1061,11 +1640,20 @@ class ApproveRegistrationTests(TestCase):
         self.assertEqual(response.status_code, 405)
 
 
+
 class RejectRegistrationTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
         User = get_user_model()
+
+        cls.emergency = Department.objects.create(
+            name="Emergency",
+            description="Emergency medical services",
+        )
+
+        cls.nurse_role = Role.objects.get(
+            name="Nurse",)
 
         cls.admin = User.objects.create_superuser(
             email="admin@example.com",
@@ -1093,7 +1681,9 @@ class RejectRegistrationTests(TestCase):
         cls.pending_user = User.objects.create_user(
             email="pending@example.com",
             password="Pending123!Test",
-            name="Pending User"
+            name="Pending User",
+            requested_department=cls.emergency,
+            requested_role=cls.nurse_role
         )
 
         cls.approved_user = User.objects.create_user(
@@ -1115,14 +1705,18 @@ class RejectRegistrationTests(TestCase):
     def setUp(self):
         self.client = Client(enforce_csrf_checks=True)
 
+    # =====================================================
     # Helpers
+    # =====================================================
 
     def rejection_url(self, user_id):
         return f"/api/auth/registrations/{user_id}/reject/"
 
     def get_csrf_token(self):
         response = self.client.get("/api/auth/csrf/")
+
         self.assertEqual(response.status_code, 200)
+
         return response.json()["csrf_token"]
 
     def reject(self, user_id, include_csrf=True):
@@ -1136,7 +1730,9 @@ class RejectRegistrationTests(TestCase):
             **headers
         )
 
+    # =====================================================
     # 1. Successful rejection
+    # =====================================================
 
     def test_admin_can_reject_pending_registration(self):
         self.client.force_login(self.admin)
@@ -1144,10 +1740,12 @@ class RejectRegistrationTests(TestCase):
         response = self.reject(self.pending_user.id)
 
         self.assertEqual(response.status_code, 200)
+
         self.assertEqual(
             response.json()["message"],
             "Registration rejected successfully."
         )
+
         self.assertEqual(
             response.json()["id"],
             self.pending_user.id
@@ -1159,14 +1757,117 @@ class RejectRegistrationTests(TestCase):
             self.pending_user.approval_status,
             "rejected"
         )
+
         self.assertFalse(self.pending_user.is_active)
 
-    # 2. Rejected user cannot log in
+    # =====================================================
+    # 2. Rejection preserves requested department and role
+    # =====================================================
+
+    def test_rejection_preserves_requested_department_and_role(self):
+        self.client.force_login(self.admin)
+
+        response = self.reject(self.pending_user.id)
+
+        self.assertEqual(response.status_code, 200)
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.requested_department,
+            self.emergency
+        )
+
+        self.assertEqual(
+            self.pending_user.requested_role,
+            self.nurse_role
+        )
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "rejected"
+        )
+
+        self.assertFalse(self.pending_user.is_active)
+
+    # =====================================================
+    # 3. Rejection does not create a membership
+    # =====================================================
+
+    def test_rejection_does_not_create_department_membership(self):
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).exists()
+        )
+
+        self.client.force_login(self.admin)
+
+        response = self.reject(self.pending_user.id)
+
+        self.assertEqual(response.status_code, 200)
+
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).exists()
+        )
+
+        self.pending_user.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_user.approval_status,
+            "rejected"
+        )
+
+        self.assertFalse(self.pending_user.is_active)
+
+    # =====================================================
+    # 4. Older registrations can still be rejected
+    # =====================================================
+
+    def test_reject_pending_user_without_department_or_role(self):
+        User = get_user_model()
+
+        old_user = User.objects.create_user(
+            email="old@example.com",
+            password="OldUser123!Test",
+            name="Old Pending User"
+        )
+
+        self.assertIsNone(old_user.requested_department)
+        self.assertIsNone(old_user.requested_role)
+
+        self.client.force_login(self.admin)
+
+        response = self.reject(old_user.id)
+
+        self.assertEqual(response.status_code, 200)
+
+        old_user.refresh_from_db()
+
+        self.assertEqual(
+            old_user.approval_status,
+            "rejected"
+        )
+
+        self.assertFalse(old_user.is_active)
+
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=old_user
+            ).exists()
+        )
+
+    # =====================================================
+    # 5. Rejected user cannot log in
+    # =====================================================
 
     def test_rejected_user_cannot_login_after_rejection(self):
         self.client.force_login(self.admin)
 
         response = self.reject(self.pending_user.id)
+
         self.assertEqual(response.status_code, 200)
 
         self.client.logout()
@@ -1182,12 +1883,15 @@ class RejectRegistrationTests(TestCase):
         )
 
         self.assertEqual(login_response.status_code, 403)
+
         self.assertEqual(
             login_response.json()["error"],
             "Your registration request was rejected."
         )
 
-    # 3. Regular users cannot reject registrations
+    # =====================================================
+    # 6. Regular users cannot reject registrations
+    # =====================================================
 
     def test_regular_user_cannot_reject(self):
         self.client.force_login(self.nurse)
@@ -1195,6 +1899,7 @@ class RejectRegistrationTests(TestCase):
         response = self.reject(self.pending_user.id)
 
         self.assertEqual(response.status_code, 403)
+
         self.assertEqual(
             response.json()["message"],
             "Administrator access required."
@@ -1206,9 +1911,18 @@ class RejectRegistrationTests(TestCase):
             self.pending_user.approval_status,
             "pending"
         )
+
         self.assertFalse(self.pending_user.is_active)
 
-    # 4. is_staff does not grant approval privileges
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).exists()
+        )
+
+    # =====================================================
+    # 7. is_staff does not grant administrator privileges
+    # =====================================================
 
     def test_staff_user_cannot_reject(self):
         self.client.force_login(self.staff_user)
@@ -1224,7 +1938,15 @@ class RejectRegistrationTests(TestCase):
             "pending"
         )
 
-    # 5. Unauthenticated users cannot reject
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).exists()
+        )
+
+    # =====================================================
+    # 8. Unauthenticated users cannot reject
+    # =====================================================
 
     def test_unauthenticated_user_cannot_reject(self):
         response = self.reject(self.pending_user.id)
@@ -1237,9 +1959,18 @@ class RejectRegistrationTests(TestCase):
             self.pending_user.approval_status,
             "pending"
         )
+
         self.assertFalse(self.pending_user.is_active)
 
-    # 6. Nonexistent user returns 404
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).exists()
+        )
+
+    # =====================================================
+    # 9. Nonexistent user returns 404
+    # =====================================================
 
     def test_reject_nonexistent_user(self):
         self.client.force_login(self.admin)
@@ -1248,7 +1979,9 @@ class RejectRegistrationTests(TestCase):
 
         self.assertEqual(response.status_code, 404)
 
-    # 7. Approved registration cannot be rejected
+    # =====================================================
+    # 10. Approved registration cannot be rejected
+    # =====================================================
 
     def test_cannot_reject_approved_user(self):
         self.client.force_login(self.admin)
@@ -1256,6 +1989,7 @@ class RejectRegistrationTests(TestCase):
         response = self.reject(self.approved_user.id)
 
         self.assertEqual(response.status_code, 409)
+
         self.assertEqual(
             response.json()["message"],
             "Only pending registrations can be rejected."
@@ -1267,9 +2001,12 @@ class RejectRegistrationTests(TestCase):
             self.approved_user.approval_status,
             "approved"
         )
+
         self.assertTrue(self.approved_user.is_active)
 
-    # 8. Already rejected registration returns 409
+    # =====================================================
+    # 11. Already rejected registration returns 409
+    # =====================================================
 
     def test_cannot_reject_already_rejected_user(self):
         self.client.force_login(self.admin)
@@ -1284,9 +2021,12 @@ class RejectRegistrationTests(TestCase):
             self.rejected_user.approval_status,
             "rejected"
         )
+
         self.assertFalse(self.rejected_user.is_active)
 
-    # 9. Rejecting the same account twice
+    # =====================================================
+    # 12. Rejecting the same account twice
+    # =====================================================
 
     def test_cannot_reject_same_user_twice(self):
         self.client.force_login(self.admin)
@@ -1303,9 +2043,18 @@ class RejectRegistrationTests(TestCase):
             self.pending_user.approval_status,
             "rejected"
         )
+
         self.assertFalse(self.pending_user.is_active)
 
-    # 10. CSRF token is required
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).exists()
+        )
+
+    # =====================================================
+    # 13. CSRF token is required
+    # =====================================================
 
     def test_rejection_requires_csrf(self):
         self.client.force_login(self.admin)
@@ -1325,7 +2074,15 @@ class RejectRegistrationTests(TestCase):
             "pending"
         )
 
-    # 11. Invalid CSRF token is rejected
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).exists()
+        )
+
+    # =====================================================
+    # 14. Invalid CSRF token is rejected
+    # =====================================================
 
     def test_invalid_csrf_token_is_rejected(self):
         self.client.force_login(self.admin)
@@ -1345,7 +2102,15 @@ class RejectRegistrationTests(TestCase):
             "pending"
         )
 
-    # 12. GET requests are not allowed
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.pending_user
+            ).exists()
+        )
+
+    # =====================================================
+    # 15. GET requests are not allowed
+    # =====================================================
 
     def test_get_request_is_not_allowed(self):
         self.client.force_login(self.admin)
@@ -1356,12 +2121,15 @@ class RejectRegistrationTests(TestCase):
 
         self.assertEqual(response.status_code, 405)
 
-    # 13. Rejected users disappear from pending list
+    # =====================================================
+    # 16. Rejected users disappear from pending list
+    # =====================================================
 
     def test_rejected_user_removed_from_pending_list(self):
         self.client.force_login(self.admin)
 
         rejection_response = self.reject(self.pending_user.id)
+
         self.assertEqual(rejection_response.status_code, 200)
 
         list_response = self.client.get(
@@ -1370,7 +2138,6 @@ class RejectRegistrationTests(TestCase):
 
         self.assertEqual(list_response.status_code, 200)
         self.assertEqual(list_response.json(), [])
-
 
 class ApprovedUserPermissionTests(TestCase):
 
@@ -3482,15 +4249,11 @@ class DepartmentRoleMembershipModelTests(TestCase):
             description="Heart-related medical services",
         )
 
-        self.nurse = Role.objects.create(
-            name="Nurse",
-            description="Provides nursing care",
-        )
+        self.nurse = Role.objects.get(
+            name="Nurse")
 
-        self.doctor = Role.objects.create(
-            name="Doctor",
-            description="Provides medical care",
-        )
+        self.doctor = Role.objects.get(
+            name="Doctor")
 
     def create_membership(self):
         return DepartmentMembership.objects.create(
@@ -3532,13 +4295,18 @@ class DepartmentRoleMembershipModelTests(TestCase):
     # Role tests
 
     def test_role_creation(self):
-        self.assertEqual(self.nurse.name, "Nurse")
-        self.assertEqual(
-            self.nurse.description,
-            "Provides nursing care",
+        role = Role.objects.create(
+            name="Test Role",
+            description="A role created for testing.",
         )
-        self.assertIsNotNone(self.nurse.id)
-        self.assertEqual(str(self.nurse), "Nurse")
+
+        self.assertEqual(role.name, "Test Role")
+        self.assertEqual(
+            role.description,
+            "A role created for testing.",
+        )
+        self.assertIsNotNone(role.id)
+        self.assertEqual(str(role), "Test Role")
 
     def test_role_description_is_optional(self):
         role = Role.objects.create(
@@ -3742,6 +4510,7 @@ class DepartmentRoleMembershipModelTests(TestCase):
         )
 
 
+
 class DepartmentListCreateTests(APITestCase):
 
     def setUp(self):
@@ -3797,7 +4566,9 @@ class DepartmentListCreateTests(APITestCase):
 
         self.url = reverse("department-list-create")
 
-    # GET tests
+    # =====================================================
+    # GET: Public department listing
+    # =====================================================
 
     def test_approved_staff_can_list_departments(self):
         self.client.force_authenticate(user=self.staff)
@@ -3811,6 +4582,7 @@ class DepartmentListCreateTests(APITestCase):
             response.data[0]["id"],
             self.emergency.id,
         )
+
         self.assertEqual(
             response.data[1]["id"],
             self.cardiology.id,
@@ -3834,33 +4606,39 @@ class DepartmentListCreateTests(APITestCase):
             {"id", "name", "description"},
         )
 
-    def test_unauthenticated_user_cannot_list_departments(self):
+    def test_unauthenticated_user_can_list_departments(self):
         response = self.client.get(self.url)
 
-        self.assertIn(response.status_code, [401, 403])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 2)
 
-    def test_pending_user_cannot_list_departments(self):
+    def test_pending_user_can_list_departments(self):
         self.client.force_authenticate(user=self.pending_user)
 
         response = self.client.get(self.url)
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 2)
 
-    def test_rejected_user_cannot_list_departments(self):
+    def test_rejected_user_can_list_departments(self):
         self.client.force_authenticate(user=self.rejected_user)
 
         response = self.client.get(self.url)
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 2)
 
-    def test_inactive_user_cannot_list_departments(self):
+    def test_inactive_user_can_list_departments(self):
         self.client.force_authenticate(user=self.inactive_user)
 
         response = self.client.get(self.url)
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 2)
 
-    # POST success tests
+    # =====================================================
+    # POST: Successful department creation
+    # =====================================================
 
     def test_admin_can_create_department(self):
         self.client.force_authenticate(user=self.admin)
@@ -3876,10 +4654,12 @@ class DepartmentListCreateTests(APITestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["name"], "Pediatrics")
+
         self.assertEqual(
             response.data["description"],
             "Healthcare for children",
         )
+
         self.assertIn("id", response.data)
 
         self.assertTrue(
@@ -3934,7 +4714,9 @@ class DepartmentListCreateTests(APITestCase):
             "Surgery",
         )
 
-    # POST permission tests
+    # =====================================================
+    # POST: Permissions
+    # =====================================================
 
     def test_regular_staff_cannot_create_department(self):
         self.client.force_authenticate(user=self.staff)
@@ -3946,6 +4728,7 @@ class DepartmentListCreateTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, 403)
+
         self.assertEqual(
             response.data["message"],
             "Administrator access required.",
@@ -4012,7 +4795,9 @@ class DepartmentListCreateTests(APITestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(Department.objects.count(), 2)
 
-    # Validation tests
+    # =====================================================
+    # POST: Validation
+    # =====================================================
 
     def test_duplicate_department_name_is_rejected(self):
         self.client.force_authenticate(user=self.admin)
@@ -4072,7 +4857,9 @@ class DepartmentListCreateTests(APITestCase):
         self.assertIn("name", response.data)
         self.assertEqual(Department.objects.count(), 2)
 
-    # CSRF tests
+    # =====================================================
+    # POST: CSRF protection
+    # =====================================================
 
     def test_post_without_csrf_token_is_rejected(self):
         client = APIClient(enforce_csrf_checks=True)
@@ -4120,7 +4907,9 @@ class DepartmentListCreateTests(APITestCase):
             ).exists()
         )
 
-    # Unsupported HTTP method
+    # =====================================================
+    # Unsupported HTTP methods
+    # =====================================================
 
     def test_patch_method_is_not_allowed(self):
         self.client.force_authenticate(user=self.admin)
@@ -4128,412 +4917,6 @@ class DepartmentListCreateTests(APITestCase):
         response = self.client.patch(
             self.url,
             {"name": "Changed"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 405)
-        self.assertEqual(Department.objects.count(), 2)
-
-
-class DepartmentDetailTests(APITestCase):
-
-    @classmethod
-    def setUpTestData(cls):
-        User = get_user_model()
-
-        cls.admin = User.objects.create_superuser(
-            email="admin@example.com",
-            name="Hospital Admin",
-            password="StrongTestPassword123!",
-        )
-
-        cls.staff = User.objects.create_user(
-            email="staff@example.com",
-            name="Approved Staff",
-            password="StrongTestPassword123!",
-            approval_status="approved",
-            is_active=True,
-        )
-
-        cls.emergency = Department.objects.create(
-            name="Emergency",
-            description="Emergency medical services",
-        )
-
-        cls.cardiology = Department.objects.create(
-            name="Cardiology",
-            description="Heart-related medical services",
-        )
-
-        cls.url = reverse(
-            "department-detail",
-            kwargs={"department_id": cls.emergency.id},
-        )
-
-    # Successful updates
-
-    def test_admin_can_update_name_and_description(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {
-                "name": "Emergency Medicine",
-                "description": "Emergency and critical care",
-            },
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        self.emergency.refresh_from_db()
-
-        self.assertEqual(
-            self.emergency.name,
-            "Emergency Medicine",
-        )
-        self.assertEqual(
-            self.emergency.description,
-            "Emergency and critical care",
-        )
-        self.assertEqual(
-            response.data["name"],
-            "Emergency Medicine",
-        )
-        self.assertEqual(
-            response.data["description"],
-            "Emergency and critical care",
-        )
-
-    def test_partial_update_name_only(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Emergency Medicine"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        self.emergency.refresh_from_db()
-
-        self.assertEqual(
-            self.emergency.name,
-            "Emergency Medicine",
-        )
-        self.assertEqual(
-            self.emergency.description,
-            "Emergency medical services",
-        )
-
-    def test_partial_update_description_only(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"description": "Updated description"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        self.emergency.refresh_from_db()
-
-        self.assertEqual(self.emergency.name, "Emergency")
-        self.assertEqual(
-            self.emergency.description,
-            "Updated description",
-        )
-
-    def test_admin_can_clear_description(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"description": ""},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        self.emergency.refresh_from_db()
-        self.assertEqual(self.emergency.description, "")
-
-    def test_updating_department_with_same_name_succeeds(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {
-                "name": "Emergency",
-                "description": "Updated description",
-            },
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(Department.objects.count(), 2)
-
-        self.emergency.refresh_from_db()
-        self.assertEqual(self.emergency.name, "Emergency")
-
-    def test_response_contains_correct_fields(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "New Emergency"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            set(response.data.keys()),
-            {"id", "name", "description"},
-        )
-        self.assertEqual(
-            response.data["id"],
-            self.emergency.id,
-        )
-
-    # Validation
-
-    def test_duplicate_department_name_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Cardiology"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("name", response.data)
-
-        self.emergency.refresh_from_db()
-        self.assertEqual(self.emergency.name, "Emergency")
-
-    def test_empty_department_name_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": ""},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("name", response.data)
-
-        self.emergency.refresh_from_db()
-        self.assertEqual(self.emergency.name, "Emergency")
-
-    def test_department_name_over_max_length_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "A" * 101},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("name", response.data)
-
-        self.emergency.refresh_from_db()
-        self.assertEqual(self.emergency.name, "Emergency")
-
-    def test_invalid_description_type_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"description": ["Invalid", "Value"]},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("description", response.data)
-
-        self.emergency.refresh_from_db()
-        self.assertEqual(
-            self.emergency.description,
-            "Emergency medical services",
-        )
-
-    def test_department_id_is_read_only(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {
-                "id": 999999,
-                "name": "Updated Emergency",
-            },
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        self.emergency.refresh_from_db()
-
-        self.assertEqual(
-            self.emergency.id,
-            response.data["id"],
-        )
-        self.assertNotEqual(self.emergency.id, 999999)
-
-    def test_nonexistent_department_returns_404(self):
-        self.client.force_authenticate(user=self.admin)
-
-        url = reverse(
-            "department-detail",
-            kwargs={"department_id": 999999},
-        )
-
-        response = self.client.patch(
-            url,
-            {"name": "Unknown Department"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 404)
-        self.assertEqual(Department.objects.count(), 2)
-
-    # Permissions
-
-    def test_regular_staff_cannot_update_department(self):
-        self.client.force_authenticate(user=self.staff)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Unauthorized Update"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(
-            response.data["message"],
-            "Administrator access required.",
-        )
-
-        self.emergency.refresh_from_db()
-        self.assertEqual(self.emergency.name, "Emergency")
-
-    def test_unauthenticated_user_cannot_update_department(self):
-        response = self.client.patch(
-            self.url,
-            {"name": "Unauthorized Update"},
-            format="json",
-        )
-
-        self.assertIn(response.status_code, [401, 403])
-
-        self.emergency.refresh_from_db()
-        self.assertEqual(self.emergency.name, "Emergency")
-
-    def test_pending_admin_cannot_update_department(self):
-        self.admin.approval_status = "pending"
-        self.admin.save(update_fields=["approval_status"])
-
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Unauthorized Update"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-
-        self.emergency.refresh_from_db()
-        self.assertEqual(self.emergency.name, "Emergency")
-
-    def test_rejected_admin_cannot_update_department(self):
-        self.admin.approval_status = "rejected"
-        self.admin.save(update_fields=["approval_status"])
-
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Unauthorized Update"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-
-        self.emergency.refresh_from_db()
-        self.assertEqual(self.emergency.name, "Emergency")
-
-    def test_inactive_admin_cannot_update_department(self):
-        self.admin.is_active = False
-        self.admin.save(update_fields=["is_active"])
-
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Unauthorized Update"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-
-        self.emergency.refresh_from_db()
-        self.assertEqual(self.emergency.name, "Emergency")
-
-    # CSRF protection
-
-    def test_patch_without_csrf_token_is_rejected(self):
-        client = APIClient(enforce_csrf_checks=True)
-        client.force_login(self.admin)
-
-        response = client.patch(
-            self.url,
-            {"name": "Unauthorized Update"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-
-        self.emergency.refresh_from_db()
-        self.assertEqual(self.emergency.name, "Emergency")
-
-    def test_patch_with_valid_csrf_token_succeeds(self):
-        client = APIClient(enforce_csrf_checks=True)
-        client.force_login(self.admin)
-
-        client.get(reverse("csrf"))
-
-        self.assertIn("csrftoken", client.cookies)
-
-        csrf_token = client.cookies["csrftoken"].value
-
-        response = client.patch(
-            self.url,
-            {"name": "CSRF Protected Update"},
-            format="json",
-            HTTP_X_CSRFTOKEN=csrf_token,
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        self.emergency.refresh_from_db()
-        self.assertEqual(
-            self.emergency.name,
-            "CSRF Protected Update",
-        )
-
-    # Unsupported HTTP methods
-
-    def test_post_method_is_not_allowed(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.post(
-            self.url,
-            {"name": "New Department"},
             format="json",
         )
 
@@ -4571,7 +4954,7 @@ class DepartmentDeleteTests(APITestCase):
             description="Cardiology services",
         )
 
-        cls.nurse = Role.objects.create(
+        cls.nurse = Role.objects.get(
             name="Nurse",
         )
 
@@ -4877,8 +5260,8 @@ class DepartmentMembershipListCreateTests(APITestCase):
             name="Cardiology",
         )
 
-        cls.nurse = Role.objects.create(name="Nurse")
-        cls.doctor = Role.objects.create(name="Doctor")
+        cls.nurse = Role.objects.get(name="Nurse")
+        cls.doctor = Role.objects.get(name="Doctor")
 
         cls.active_membership = DepartmentMembership.objects.create(
             user=cls.staff,
@@ -5451,8 +5834,8 @@ class DepartmentMembershipDetailTests(APITestCase):
             name="Cardiology",
         )
 
-        cls.nurse = Role.objects.create(name="Nurse")
-        cls.doctor = Role.objects.create(name="Doctor")
+        cls.nurse = Role.objects.get(name="Nurse")
+        cls.doctor = Role.objects.get(name="Doctor")
 
         cls.membership = DepartmentMembership.objects.create(
             user=cls.staff,
@@ -6019,6 +6402,7 @@ class DepartmentMembershipDetailTests(APITestCase):
         self.assertEqual(response.status_code, 405)
 
 
+
 class RoleListCreateTests(APITestCase):
 
     @classmethod
@@ -6026,7 +6410,7 @@ class RoleListCreateTests(APITestCase):
         User = get_user_model()
 
         cls.admin = User.objects.create_superuser(
-            email="admin@example.com",
+        email="admin@example.com",
             name="Hospital Admin",
             password="StrongTestPassword123!",
         )
@@ -6063,27 +6447,21 @@ class RoleListCreateTests(APITestCase):
             is_active=False,
         )
 
-        cls.nurse = Role.objects.create(
-            name="Nurse",
-            description="Provides nursing care.",
-        )
+        cls.nurse = Role.objects.get(name="Nurse")
 
-        cls.doctor = Role.objects.create(
-            name="Doctor",
-            description="Provides medical care.",
-        )
+        cls.doctor = Role.objects.get(name="Doctor")
 
         cls.url = reverse("role-list-create")
 
-    def valid_payload(self):
-        return {
-            "name": "Coordinator",
-            "description": "Coordinates departmental activities.",
-        }
+    # =====================================================
+    # GET: Public role listing
+    # =====================================================
 
-    # =====================================================
-    # GET: Successful listing
-    # =====================================================
+    def test_unauthenticated_user_can_list_roles(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 2)
 
     def test_approved_staff_can_list_roles(self):
         self.client.force_authenticate(user=self.staff)
@@ -6101,9 +6479,35 @@ class RoleListCreateTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 2)
 
-    def test_roles_are_ordered_by_id(self):
-        self.client.force_authenticate(user=self.staff)
+    def test_pending_user_can_list_roles(self):
+        self.client.force_authenticate(user=self.pending_staff)
 
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 2)
+
+    def test_rejected_user_can_list_roles(self):
+        self.client.force_authenticate(user=self.rejected_staff)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 2)
+
+    def test_inactive_user_can_list_roles(self):
+        self.client.force_authenticate(user=self.inactive_staff)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 2)
+
+    # =====================================================
+    # GET: Response validation
+    # =====================================================
+
+    def test_roles_are_ordered_by_id(self):
         response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, 200)
@@ -6111,8 +6515,6 @@ class RoleListCreateTests(APITestCase):
         self.assertEqual(response.data[1]["id"], self.doctor.id)
 
     def test_role_response_contains_correct_fields(self):
-        self.client.force_authenticate(user=self.staff)
-
         response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, 200)
@@ -6132,8 +6534,6 @@ class RoleListCreateTests(APITestCase):
         )
 
     def test_empty_role_list_returns_empty_array(self):
-        self.client.force_authenticate(user=self.admin)
-
         Role.objects.all().delete()
 
         response = self.client.get(self.url)
@@ -6142,226 +6542,22 @@ class RoleListCreateTests(APITestCase):
         self.assertEqual(response.data, [])
 
     # =====================================================
-    # GET: Permissions
+    # POST: Role creation is disabled
     # =====================================================
 
-    def test_unauthenticated_user_cannot_list_roles(self):
-        response = self.client.get(self.url)
-
-        self.assertIn(response.status_code, [401, 403])
-
-    def test_pending_user_cannot_list_roles(self):
-        self.client.force_authenticate(user=self.pending_staff)
-
-        response = self.client.get(self.url)
-
-        self.assertEqual(response.status_code, 403)
-
-    def test_rejected_user_cannot_list_roles(self):
-        self.client.force_authenticate(user=self.rejected_staff)
-
-        response = self.client.get(self.url)
-
-        self.assertEqual(response.status_code, 403)
-
-    def test_inactive_user_cannot_list_roles(self):
-        self.client.force_authenticate(user=self.inactive_staff)
-
-        response = self.client.get(self.url)
-
-        self.assertEqual(response.status_code, 403)
-
-    # =====================================================
-    # POST: Successful creation
-    # =====================================================
-
-    def test_admin_can_create_role(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.post(
-            self.url,
-            self.valid_payload(),
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 201)
-
-        self.assertIn("id", response.data)
-        self.assertEqual(
-            response.data["name"],
-            "Coordinator",
-        )
-        self.assertEqual(
-            response.data["description"],
-            "Coordinates departmental activities.",
-        )
-
-        self.assertTrue(
-            Role.objects.filter(
-                name="Coordinator",
-            ).exists()
-        )
-
-        self.assertEqual(Role.objects.count(), 3)
-
-    def test_admin_can_create_role_without_description(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.post(
-            self.url,
-            {"name": "Pharmacist"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(
-            response.data["name"],
-            "Pharmacist",
-        )
-        self.assertEqual(
-            response.data["description"],
-            "",
-        )
-
-    def test_role_id_is_read_only(self):
-        self.client.force_authenticate(user=self.admin)
-
-        payload = self.valid_payload()
-        payload["id"] = self.nurse.id
-
-        response = self.client.post(
-            self.url,
-            payload,
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 201)
-
-        self.assertNotEqual(
-            response.data["id"],
-            self.nurse.id,
-        )
-
-        self.assertTrue(
-            Role.objects.filter(
-                id=self.nurse.id,
-                name="Nurse",
-            ).exists()
-        )
-
-    # =====================================================
-    # POST: Validation
-    # =====================================================
-
-    def test_duplicate_role_name_is_rejected(self):
+    def test_admin_cannot_create_role(self):
         self.client.force_authenticate(user=self.admin)
 
         response = self.client.post(
             self.url,
             {
-                "name": "Nurse",
-                "description": "Another nursing role.",
+                "name": "Coordinator",
+                "description": "Coordinates tasks.",
             },
             format="json",
         )
 
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("name", response.data)
-        self.assertEqual(Role.objects.count(), 2)
-
-    def test_blank_role_name_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.post(
-            self.url,
-            {
-                "name": "",
-                "description": "Test description",
-            },
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("name", response.data)
-
-    def test_whitespace_role_name_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.post(
-            self.url,
-            {
-                "name": "   ",
-                "description": "Test description",
-            },
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("name", response.data)
-
-    def test_missing_role_name_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.post(
-            self.url,
-            {
-                "description": "Role without a name.",
-            },
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("name", response.data)
-
-    def test_role_name_over_max_length_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.post(
-            self.url,
-            {
-                "name": "A" * 101,
-                "description": "Test description",
-            },
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("name", response.data)
-
-    def test_invalid_description_type_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.post(
-            self.url,
-            {
-                "name": "Technician",
-                "description": ["invalid", "description"],
-            },
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("description", response.data)
-
-    # =====================================================
-    # POST: Permissions
-    # =====================================================
-
-    def test_regular_staff_cannot_create_role(self):
-        self.client.force_authenticate(user=self.staff)
-
-        response = self.client.post(
-            self.url,
-            self.valid_payload(),
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-
-        self.assertEqual(
-            response.data["message"],
-            "Administrator access required.",
-        )
+        self.assertEqual(response.status_code, 405)
 
         self.assertFalse(
             Role.objects.filter(
@@ -6369,102 +6565,17 @@ class RoleListCreateTests(APITestCase):
             ).exists()
         )
 
+        self.assertEqual(Role.objects.count(), 3)
+
     def test_unauthenticated_user_cannot_create_role(self):
         response = self.client.post(
             self.url,
-            self.valid_payload(),
+            {"name": "Coordinator"},
             format="json",
         )
 
-        self.assertIn(response.status_code, [401, 403])
-        self.assertEqual(Role.objects.count(), 2)
-
-    def test_pending_admin_cannot_create_role(self):
-        self.admin.approval_status = "pending"
-        self.admin.save(update_fields=["approval_status"])
-
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.post(
-            self.url,
-            self.valid_payload(),
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(Role.objects.count(), 2)
-
-    def test_rejected_admin_cannot_create_role(self):
-        self.admin.approval_status = "rejected"
-        self.admin.save(update_fields=["approval_status"])
-
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.post(
-            self.url,
-            self.valid_payload(),
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(Role.objects.count(), 2)
-
-    def test_inactive_admin_cannot_create_role(self):
-        self.admin.is_active = False
-        self.admin.save(update_fields=["is_active"])
-
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.post(
-            self.url,
-            self.valid_payload(),
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(Role.objects.count(), 2)
-
-    # =====================================================
-    # POST: CSRF protection
-    # =====================================================
-
-    def test_post_without_csrf_token_is_rejected(self):
-        client = APIClient(enforce_csrf_checks=True)
-        client.force_login(self.admin)
-
-        response = client.post(
-            self.url,
-            self.valid_payload(),
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(Role.objects.count(), 2)
-
-    def test_post_with_valid_csrf_token_succeeds(self):
-        client = APIClient(enforce_csrf_checks=True)
-        client.force_login(self.admin)
-
-        client.get(reverse("csrf"))
-
-        self.assertIn("csrftoken", client.cookies)
-
-        csrf_token = client.cookies["csrftoken"].value
-
-        response = client.post(
-            self.url,
-            self.valid_payload(),
-            format="json",
-            HTTP_X_CSRFTOKEN=csrf_token,
-        )
-
-        self.assertEqual(response.status_code, 201)
-
-        self.assertTrue(
-            Role.objects.filter(
-                name="Coordinator",
-            ).exists()
-        )
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(Role.objects.count(), 3)
 
     # =====================================================
     # Unsupported HTTP methods
@@ -6488,648 +6599,7 @@ class RoleListCreateTests(APITestCase):
 
         self.assertEqual(response.status_code, 405)
 
-
-class RoleDetailTests(APITestCase):
-
-    @classmethod
-    def setUpTestData(cls):
-        User = get_user_model()
-
-        cls.admin = User.objects.create_superuser(
-            email="admin@example.com",
-            name="Hospital Admin",
-            password="StrongTestPassword123!",
-        )
-
-        cls.staff = User.objects.create_user(
-            email="staff@example.com",
-            name="Approved Staff",
-            password="StrongTestPassword123!",
-            approval_status="approved",
-            is_active=True,
-        )
-
-        cls.pending_staff = User.objects.create_user(
-            email="pending@example.com",
-            name="Pending Staff",
-            password="StrongTestPassword123!",
-            approval_status="pending",
-            is_active=True,
-        )
-
-        cls.rejected_staff = User.objects.create_user(
-            email="rejected@example.com",
-            name="Rejected Staff",
-            password="StrongTestPassword123!",
-            approval_status="rejected",
-            is_active=True,
-        )
-
-        cls.inactive_staff = User.objects.create_user(
-            email="inactive@example.com",
-            name="Inactive Staff",
-            password="StrongTestPassword123!",
-            approval_status="approved",
-            is_active=False,
-        )
-
-        cls.emergency = Department.objects.create(
-            name="Emergency",
-        )
-
-        cls.nurse = Role.objects.create(
-            name="Nurse",
-            description="Provides nursing care.",
-        )
-
-        cls.doctor = Role.objects.create(
-            name="Doctor",
-            description="Provides medical care.",
-        )
-
-        cls.membership = DepartmentMembership.objects.create(
-            user=cls.staff,
-            department=cls.emergency,
-            role=cls.nurse,
-        )
-
-        cls.url = reverse(
-            "role-detail",
-            kwargs={"role_id": cls.doctor.id},
-        )
-
-        cls.protected_url = reverse(
-            "role-detail",
-            kwargs={"role_id": cls.nurse.id},
-        )
-
-    # =====================================================
-    # PATCH: Successful updates
-    # =====================================================
-
-    def test_admin_can_update_name_and_description(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {
-                "name": "Senior Doctor",
-                "description": "Senior medical practitioner.",
-            },
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["name"], "Senior Doctor")
-        self.assertEqual(
-            response.data["description"],
-            "Senior medical practitioner.",
-        )
-
-        self.doctor.refresh_from_db()
-        self.assertEqual(self.doctor.name, "Senior Doctor")
-        self.assertEqual(
-            self.doctor.description,
-            "Senior medical practitioner.",
-        )
-
-    def test_patch_name_only_preserves_description(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Senior Doctor"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        self.doctor.refresh_from_db()
-
-        self.assertEqual(self.doctor.name, "Senior Doctor")
-        self.assertEqual(
-            self.doctor.description,
-            "Provides medical care.",
-        )
-
-    def test_patch_description_only_preserves_name(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"description": "Updated medical responsibilities."},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        self.doctor.refresh_from_db()
-
-        self.assertEqual(self.doctor.name, "Doctor")
-        self.assertEqual(
-            self.doctor.description,
-            "Updated medical responsibilities.",
-        )
-
-    def test_admin_can_clear_description(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"description": ""},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        self.doctor.refresh_from_db()
-        self.assertEqual(self.doctor.description, "")
-
-    def test_updating_role_with_same_name_succeeds(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Doctor"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["name"], "Doctor")
-
-    def test_role_id_is_read_only(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {
-                "id": 999999,
-                "name": "Senior Doctor",
-            },
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["id"], self.doctor.id)
-
-        self.assertTrue(
-            Role.objects.filter(
-                id=self.doctor.id,
-                name="Senior Doctor",
-            ).exists()
-        )
-
-    def test_empty_patch_succeeds_without_changes(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        self.doctor.refresh_from_db()
-
-        self.assertEqual(self.doctor.name, "Doctor")
-        self.assertEqual(
-            self.doctor.description,
-            "Provides medical care.",
-        )
-
-    # =====================================================
-    # PATCH: Validation
-    # =====================================================
-
-    def test_duplicate_role_name_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Nurse"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("name", response.data)
-
-        self.doctor.refresh_from_db()
-        self.assertEqual(self.doctor.name, "Doctor")
-
-    def test_blank_role_name_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": ""},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("name", response.data)
-
-    def test_whitespace_role_name_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "   "},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("name", response.data)
-
-    def test_role_name_over_max_length_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "A" * 101},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("name", response.data)
-
-    def test_invalid_description_type_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"description": ["invalid", "description"]},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("description", response.data)
-
-    def test_null_description_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"description": None},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("description", response.data)
-
-    # =====================================================
-    # PATCH: Nonexistent role
-    # =====================================================
-
-    def test_patch_nonexistent_role_returns_404(self):
-        self.client.force_authenticate(user=self.admin)
-
-        url = reverse(
-            "role-detail",
-            kwargs={"role_id": 999999},
-        )
-
-        response = self.client.patch(
-            url,
-            {"name": "Updated Role"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 404)
-
-    # =====================================================
-    # PATCH: Permissions
-    # =====================================================
-
-    def test_regular_staff_cannot_patch_role(self):
-        self.client.force_authenticate(user=self.staff)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Senior Doctor"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(
-            response.data["message"],
-            "Administrator access required.",
-        )
-
-        self.doctor.refresh_from_db()
-        self.assertEqual(self.doctor.name, "Doctor")
-
-    def test_unauthenticated_user_cannot_patch_role(self):
-        response = self.client.patch(
-            self.url,
-            {"name": "Senior Doctor"},
-            format="json",
-        )
-
-        self.assertIn(response.status_code, [401, 403])
-
-    def test_pending_admin_cannot_patch_role(self):
-        self.admin.approval_status = "pending"
-        self.admin.save(update_fields=["approval_status"])
-
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Senior Doctor"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-
-    def test_rejected_admin_cannot_patch_role(self):
-        self.admin.approval_status = "rejected"
-        self.admin.save(update_fields=["approval_status"])
-
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Senior Doctor"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-
-    def test_inactive_admin_cannot_patch_role(self):
-        self.admin.is_active = False
-        self.admin.save(update_fields=["is_active"])
-
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Senior Doctor"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-
-    # =====================================================
-    # PATCH: CSRF protection
-    # =====================================================
-
-    def test_patch_without_csrf_token_is_rejected(self):
-        client = APIClient(enforce_csrf_checks=True)
-        client.force_login(self.admin)
-
-        response = client.patch(
-            self.url,
-            {"name": "Senior Doctor"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-
-        self.doctor.refresh_from_db()
-        self.assertEqual(self.doctor.name, "Doctor")
-
-    def test_patch_with_valid_csrf_token_succeeds(self):
-        client = APIClient(enforce_csrf_checks=True)
-        client.force_login(self.admin)
-
-        client.get(reverse("csrf"))
-
-        self.assertIn("csrftoken", client.cookies)
-
-        csrf_token = client.cookies["csrftoken"].value
-
-        response = client.patch(
-            self.url,
-            {"name": "Senior Doctor"},
-            format="json",
-            HTTP_X_CSRFTOKEN=csrf_token,
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        self.doctor.refresh_from_db()
-        self.assertEqual(self.doctor.name, "Senior Doctor")
-
-    # =====================================================
-    # DELETE: Successful deletion
-    # =====================================================
-
-    def test_admin_can_delete_unused_role(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.delete(self.url)
-
-        self.assertEqual(response.status_code, 204)
-        self.assertEqual(response.content, b"")
-
-        self.assertFalse(
-            Role.objects.filter(
-                id=self.doctor.id,
-            ).exists()
-        )
-
-    def test_deleting_role_preserves_other_roles(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.delete(self.url)
-
-        self.assertEqual(response.status_code, 204)
-
-        self.assertTrue(
-            Role.objects.filter(
-                id=self.nurse.id,
-            ).exists()
-        )
-
-        self.assertEqual(Role.objects.count(), 1)
-
-    def test_deleting_same_role_twice_returns_404(self):
-        self.client.force_authenticate(user=self.admin)
-
-        first_response = self.client.delete(self.url)
-        second_response = self.client.delete(self.url)
-
-        self.assertEqual(first_response.status_code, 204)
-        self.assertEqual(second_response.status_code, 404)
-
-    # =====================================================
-    # DELETE: Protected roles
-    # =====================================================
-
-    def test_role_with_memberships_cannot_be_deleted(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.delete(self.protected_url)
-
-        self.assertEqual(response.status_code, 409)
-        self.assertEqual(
-            response.data["message"],
-            "Cannot delete a role that is currently in use.",
-        )
-
-        self.assertTrue(
-            Role.objects.filter(
-                id=self.nurse.id,
-            ).exists()
-        )
-
-    def test_protected_deletion_preserves_membership(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.delete(self.protected_url)
-
-        self.assertEqual(response.status_code, 409)
-
-        self.assertTrue(
-            DepartmentMembership.objects.filter(
-                id=self.membership.id,
-                role=self.nurse,
-            ).exists()
-        )
-
-        self.assertTrue(
-            Department.objects.filter(
-                id=self.emergency.id,
-            ).exists()
-        )
-
-        self.assertTrue(
-            get_user_model().objects.filter(
-                id=self.staff.id,
-            ).exists()
-        )
-
-    # =====================================================
-    # DELETE: Nonexistent role
-    # =====================================================
-
-    def test_delete_nonexistent_role_returns_404(self):
-        self.client.force_authenticate(user=self.admin)
-
-        url = reverse(
-            "role-detail",
-            kwargs={"role_id": 999999},
-        )
-
-        response = self.client.delete(url)
-
-        self.assertEqual(response.status_code, 404)
-
-    # =====================================================
-    # DELETE: Permissions
-    # =====================================================
-
-    def test_regular_staff_cannot_delete_role(self):
-        self.client.force_authenticate(user=self.staff)
-
-        response = self.client.delete(self.url)
-
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(
-            response.data["message"],
-            "Administrator access required.",
-        )
-
-        self.assertTrue(
-            Role.objects.filter(
-                id=self.doctor.id,
-            ).exists()
-        )
-
-    def test_unauthenticated_user_cannot_delete_role(self):
-        response = self.client.delete(self.url)
-
-        self.assertIn(response.status_code, [401, 403])
-
-        self.assertTrue(
-            Role.objects.filter(
-                id=self.doctor.id,
-            ).exists()
-        )
-
-    def test_pending_admin_cannot_delete_role(self):
-        self.admin.approval_status = "pending"
-        self.admin.save(update_fields=["approval_status"])
-
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.delete(self.url)
-
-        self.assertEqual(response.status_code, 403)
-
-    def test_rejected_admin_cannot_delete_role(self):
-        self.admin.approval_status = "rejected"
-        self.admin.save(update_fields=["approval_status"])
-
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.delete(self.url)
-
-        self.assertEqual(response.status_code, 403)
-
-    def test_inactive_admin_cannot_delete_role(self):
-        self.admin.is_active = False
-        self.admin.save(update_fields=["is_active"])
-
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.delete(self.url)
-
-        self.assertEqual(response.status_code, 403)
-
-    # =====================================================
-    # DELETE: CSRF protection
-    # =====================================================
-
-    def test_delete_without_csrf_token_is_rejected(self):
-        client = APIClient(enforce_csrf_checks=True)
-        client.force_login(self.admin)
-
-        response = client.delete(self.url)
-
-        self.assertEqual(response.status_code, 403)
-
-        self.assertTrue(
-            Role.objects.filter(
-                id=self.doctor.id,
-            ).exists()
-        )
-
-    def test_delete_with_valid_csrf_token_succeeds(self):
-        client = APIClient(enforce_csrf_checks=True)
-        client.force_login(self.admin)
-
-        client.get(reverse("csrf"))
-
-        self.assertIn("csrftoken", client.cookies)
-
-        csrf_token = client.cookies["csrftoken"].value
-
-        response = client.delete(
-            self.url,
-            HTTP_X_CSRFTOKEN=csrf_token,
-        )
-
-        self.assertEqual(response.status_code, 204)
-
-        self.assertFalse(
-            Role.objects.filter(
-                id=self.doctor.id,
-            ).exists()
-        )
-
-    # =====================================================
-    # Unsupported HTTP methods
-    # =====================================================
-
-    def test_get_method_is_not_allowed(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.get(self.url)
-
-        self.assertEqual(response.status_code, 405)
-
+        self.assertEqual(Role.objects.count(), 3)
 
 class RolePermissionModelTests(TestCase):
 
@@ -7145,11 +6615,9 @@ class RolePermissionModelTests(TestCase):
             is_active=True,
         )
 
-        cls.nurse = Role.objects.create(
-            name="Nurse",
-            description="Provides nursing care.",
-        )
+        cls.nurse = Role.objects.get(name="Nurse")
 
+        # Test-only role, not part of CareFlow's predefined roles
         cls.coordinator = Role.objects.create(
             name="Coordinator",
             description="Coordinates departmental tasks.",
@@ -7165,17 +6633,17 @@ class RolePermissionModelTests(TestCase):
 
     def test_can_create_role_permission(self):
         permission = RolePermission.objects.create(
-            role=self.nurse,
+            role=self.coordinator,
             codename="tasks.view",
         )
 
         self.assertIsNotNone(permission.id)
-        self.assertEqual(permission.role, self.nurse)
+        self.assertEqual(permission.role, self.coordinator)
         self.assertEqual(permission.codename, "tasks.view")
 
         self.assertTrue(
             RolePermission.objects.filter(
-                role=self.nurse,
+                role=self.coordinator,
                 codename="tasks.view",
             ).exists()
         )
@@ -7204,18 +6672,30 @@ class RolePermissionModelTests(TestCase):
         )
 
     def test_different_roles_can_share_same_permission(self):
-        RolePermission.objects.create(
+        # Nurse already has tasks.view from migration 0007.
+        nurse_permission = RolePermission.objects.get(
             role=self.nurse,
             codename="tasks.view",
         )
 
-        RolePermission.objects.create(
+        coordinator_permission = RolePermission.objects.create(
             role=self.coordinator,
             codename="tasks.view",
         )
 
         self.assertEqual(
+            nurse_permission.codename,
+            coordinator_permission.codename,
+        )
+
+        self.assertNotEqual(
+            nurse_permission.role,
+            coordinator_permission.role,
+        )
+
+        self.assertEqual(
             RolePermission.objects.filter(
+                role__in=[self.nurse, self.coordinator],
                 codename="tasks.view",
             ).count(),
             2,
@@ -7317,17 +6797,26 @@ class RolePermissionModelTests(TestCase):
         )
 
     def test_cascade_preserves_other_roles_permissions(self):
-        RolePermission.objects.create(
+        coordinator_permission = RolePermission.objects.create(
             role=self.coordinator,
             codename="tasks.assign",
         )
 
-        nurse_permission = RolePermission.objects.create(
+        # Retrieve the permission inserted by migration 0007.
+        nurse_permission = RolePermission.objects.get(
             role=self.nurse,
             codename="tasks.view",
         )
 
+        total_before = RolePermission.objects.count()
+
         self.coordinator.delete()
+
+        self.assertFalse(
+            RolePermission.objects.filter(
+                id=coordinator_permission.id,
+            ).exists()
+        )
 
         self.assertTrue(
             Role.objects.filter(
@@ -7343,7 +6832,7 @@ class RolePermissionModelTests(TestCase):
 
         self.assertEqual(
             RolePermission.objects.count(),
-            1,
+            total_before - 1,
         )
 
     # =====================================================
@@ -7373,7 +6862,8 @@ class RolePermissionModelTests(TestCase):
             role=self.nurse,
         )
 
-        permission = RolePermission.objects.create(
+        # This permission already exists.
+        permission = RolePermission.objects.get(
             role=self.nurse,
             codename="tasks.view",
         )
@@ -7423,4 +6913,303 @@ class RolePermissionModelTests(TestCase):
             Role.objects.filter(
                 id=self.coordinator.id,
             ).exists()
+        )
+
+
+class RegistrationWorkflowIntegrationTests(TestCase):
+
+    @classmethod
+    def setUpTestData(cls):
+        User = get_user_model()
+
+        cls.admin = User.objects.create_superuser(
+            email="admin@example.com",
+            name="Hospital Admin",
+            password="Admin123!Test",
+        )
+
+        cls.emergency = Department.objects.create(
+            name="Emergency",
+            description="Emergency medical services",
+        )
+
+        cls.nurse_role = Role.objects.get(
+            name="Nurse"
+        )
+
+    def setUp(self):
+        self.client = Client(enforce_csrf_checks=True)
+
+        self.register_url = "/api/auth/register/"
+        self.login_url = "/api/auth/login/"
+        self.pending_url = "/api/auth/registrations/pending/"
+        self.csrf_url = "/api/auth/csrf/"
+
+        self.registration_data = {
+            "name": "Sara",
+            "email": "sara@example.com",
+            "password": "SecurePassword123!",
+            "requested_department": self.emergency.id,
+            "requested_role": self.nurse_role.id,
+        }
+
+    # =====================================================
+    # Helpers
+    # =====================================================
+
+    def get_csrf_token(self):
+        response = self.client.get(self.csrf_url)
+
+        self.assertEqual(response.status_code, 200)
+
+        return response.json()["csrf_token"]
+
+    def post_with_csrf(self, url, data=None):
+        token = self.get_csrf_token()
+
+        if data is None:
+            return self.client.post(
+                url,
+                HTTP_X_CSRFTOKEN=token,
+            )
+
+        return self.client.post(
+            url,
+            data=json.dumps(data),
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=token,
+        )
+
+    def register_sara(self):
+        return self.post_with_csrf(
+            self.register_url,
+            self.registration_data,
+        )
+
+    def login_sara(self):
+        return self.post_with_csrf(
+            self.login_url,
+            {
+                "email": self.registration_data["email"],
+                "password": self.registration_data["password"],
+            },
+        )
+
+    # =====================================================
+    # 1. Complete registration and approval workflow
+    # =====================================================
+
+    def test_complete_registration_approval_workflow(self):
+        User = get_user_model()
+
+        # Step 1: Registration options are publicly accessible.
+
+        roles_response = self.client.get("/api/auth/roles/")
+        departments_response = self.client.get(
+            "/api/auth/departments/"
+        )
+
+        self.assertEqual(roles_response.status_code, 200)
+        self.assertEqual(departments_response.status_code, 200)
+
+        # Step 2: Sara registers.
+
+        register_response = self.register_sara()
+
+        self.assertEqual(register_response.status_code, 201)
+
+        sara = User.objects.get(
+            email=self.registration_data["email"]
+        )
+
+        self.assertEqual(sara.approval_status, "pending")
+        self.assertFalse(sara.is_active)
+
+        self.assertEqual(
+            sara.requested_department,
+            self.emergency
+        )
+
+        self.assertEqual(
+            sara.requested_role,
+            self.nurse_role
+        )
+
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=sara
+            ).exists()
+        )
+
+        # Step 3: Sara cannot log in before approval.
+
+        pending_login_response = self.login_sara()
+
+        self.assertEqual(pending_login_response.status_code, 403)
+
+        # Step 4: Administrator views the pending registration.
+
+        self.client.force_login(self.admin)
+
+        pending_response = self.client.get(self.pending_url)
+
+        self.assertEqual(pending_response.status_code, 200)
+        self.assertEqual(len(pending_response.json()), 1)
+
+        pending_data = pending_response.json()[0]
+
+        self.assertEqual(pending_data["id"], sara.id)
+
+        self.assertEqual(
+            pending_data["requested_department_name"],
+            "Emergency"
+        )
+
+        self.assertEqual(
+            pending_data["requested_role_name"],
+            "Nurse"
+        )
+
+        # Step 5: Administrator approves Sara.
+
+        approve_url = (
+            f"/api/auth/registrations/{sara.id}/approve/"
+        )
+
+        approve_response = self.post_with_csrf(approve_url)
+
+        self.assertEqual(approve_response.status_code, 200)
+
+        # Step 6: Verify account activation.
+
+        sara.refresh_from_db()
+
+        self.assertEqual(sara.approval_status, "approved")
+        self.assertTrue(sara.is_active)
+        self.assertFalse(sara.is_staff)
+        self.assertFalse(sara.is_superuser)
+
+        # Step 7: Verify confirmed department membership.
+
+        memberships = DepartmentMembership.objects.filter(
+            user=sara
+        )
+
+        self.assertEqual(memberships.count(), 1)
+
+        membership = memberships.get()
+
+        self.assertEqual(
+            membership.department,
+            self.emergency
+        )
+
+        self.assertEqual(
+            membership.role,
+            self.nurse_role
+        )
+
+        # Step 8: Sara disappears from pending registrations.
+
+        pending_response = self.client.get(self.pending_url)
+
+        self.assertEqual(pending_response.status_code, 200)
+        self.assertEqual(pending_response.json(), [])
+
+        # Step 9: Sara can now log in.
+
+        self.client.logout()
+
+        approved_login_response = self.login_sara()
+
+        self.assertEqual(
+            approved_login_response.status_code,
+            200
+        )
+
+        self.assertIn("sessionid", self.client.cookies)
+
+        # Step 10: Sara can access her protected profile.
+
+        profile_response = self.client.get("/api/auth/me/")
+
+        self.assertEqual(profile_response.status_code, 200)
+
+    # =====================================================
+    # 2. Complete registration and rejection workflow
+    # =====================================================
+
+    def test_complete_registration_rejection_workflow(self):
+        User = get_user_model()
+
+        # Step 1: Sara registers.
+
+        register_response = self.register_sara()
+
+        self.assertEqual(register_response.status_code, 201)
+
+        sara = User.objects.get(
+            email=self.registration_data["email"]
+        )
+
+        self.assertEqual(sara.approval_status, "pending")
+        self.assertFalse(sara.is_active)
+
+        # Step 2: Administrator rejects the registration.
+
+        self.client.force_login(self.admin)
+
+        reject_url = (
+            f"/api/auth/registrations/{sara.id}/reject/"
+        )
+
+        reject_response = self.post_with_csrf(reject_url)
+
+        self.assertEqual(reject_response.status_code, 200)
+
+        # Step 3: Account remains inactive.
+
+        sara.refresh_from_db()
+
+        self.assertEqual(sara.approval_status, "rejected")
+        self.assertFalse(sara.is_active)
+
+        # Step 4: Requested information remains available.
+
+        self.assertEqual(
+            sara.requested_department,
+            self.emergency
+        )
+
+        self.assertEqual(
+            sara.requested_role,
+            self.nurse_role
+        )
+
+        # Step 5: No confirmed membership exists.
+
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=sara
+            ).exists()
+        )
+
+        # Step 6: Sara disappears from pending registrations.
+
+        pending_response = self.client.get(self.pending_url)
+
+        self.assertEqual(pending_response.status_code, 200)
+        self.assertEqual(pending_response.json(), [])
+
+        # Step 7: Sara cannot log in.
+
+        self.client.logout()
+
+        login_response = self.login_sara()
+
+        self.assertEqual(login_response.status_code, 403)
+
+        self.assertEqual(
+            login_response.json()["error"],
+            "Your registration request was rejected."
         )

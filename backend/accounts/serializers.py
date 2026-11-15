@@ -5,18 +5,62 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import RolePermission
 from .permissions_catalog import ALLOWED_PERMISSIONS
 
+
 class RegisterSerializer(serializers.ModelSerializer):
+    requested_department = serializers.PrimaryKeyRelatedField(
+        queryset=Department.objects.all(),
+        required=True,
+        allow_null=False,
+    )
+
+    requested_role = serializers.PrimaryKeyRelatedField(
+        queryset=Role.objects.all(),
+        required=True,
+        allow_null=False,
+    )
+
     class Meta:
         model = User
-        fields = ["name", "email", "password"]
+        fields = [
+            "name",
+            "email",
+            "password",
+            "requested_department",
+            "requested_role",
+        ]
+
         extra_kwargs = {
             "password": {
                 "write_only": True,
                 "required": True,
             }
         }
-    
+
+    def validate_requested_role(self, value):
+        """
+        Prevent applicants from requesting reserved administrator roles.
+        """
+
+        restricted_roles = {
+            "admin",
+            "administrator",
+            "hospital admin",
+            "hospital administrator",
+            "superuser",
+        }
+
+        if value.name.strip().casefold() in restricted_roles:
+            raise serializers.ValidationError(
+                "This role cannot be requested during registration."
+            )
+
+        return value
+
     def create(self, validated_data):
+        """
+        Create an inactive user awaiting administrator approval.
+        """
+
         user = User.objects.create_user(
             **validated_data,
             is_active=False,
@@ -24,26 +68,61 @@ class RegisterSerializer(serializers.ModelSerializer):
             is_staff=False,
             is_superuser=False,
         )
+
         return user
-    
+
     def validate_password(self, value):
+        """
+        Validate the password using Django's password validators.
+        """
+
         user = User(
             name=self.initial_data.get("name", ""),
-            email=self.initial_data.get("email", "")
+            email=self.initial_data.get("email", ""),
         )
 
         try:
             validate_password(value, user=user)
         except DjangoValidationError as error:
             raise serializers.ValidationError(error.messages)
-        
+
         return value
 
+    def validate_requested_role(self, value):
+        if value.name not in ("Nurse", "Doctor"):
+            raise serializers.ValidationError(
+                "This role is not available for public registration."
+            )
+
+        return value
+
+
 class PendingRegistrationSerializer(serializers.ModelSerializer):
+    requested_department_name = serializers.CharField(
+        source="requested_department.name",
+        read_only=True,
+        allow_null=True
+    )
+
+    requested_role_name = serializers.CharField(
+        source="requested_role.name",
+        read_only=True,
+        allow_null=True
+    )
+
     class Meta:
         model = User
-        fields = ["id", "name", "email", "approval_status"]
-
+        fields = [
+            "id",
+            "name",
+            "email",
+            "approval_status",
+            "requested_department",
+            "requested_department_name",
+            "requested_role",
+            "requested_role_name",
+        ]
+        read_only_fields = fields
 
 class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
