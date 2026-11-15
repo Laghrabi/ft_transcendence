@@ -132,14 +132,21 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
+# import os
+
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [(
-                os.getenv("REDIS_HOST", "redis"),
-                int(os.getenv("REDIS_PORT", "6379"))
-            )],
+            "hosts": [
+                {
+                    "address": (
+                        f"redis://{os.getenv('REDIS_HOST', 'redis')}:"
+                        f"{os.getenv('REDIS_PORT', '6379')}/0"
+                    ),
+                    "socket_timeout": None,
+                }
+            ],
         },
     },
 }
