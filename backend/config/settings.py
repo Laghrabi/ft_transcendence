@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'accounts.apps.AccountsConfig',
     'collaboration.apps.CollaborationConfig',
+    "analytics.apps.AnalyticsConfig",
 ]
 
 MIDDLEWARE = [
