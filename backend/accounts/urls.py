@@ -1,8 +1,9 @@
 from django.urls import path
 from .views import LoginView, generate_token, MeView, LogoutView, RegisterView
 from .views import PendingRegistrationsView, ApproveRegistrationView, RejectRegistrationView, StaffProfileView
-from .views import StaffListView, AdminStaffUpdateView, DeactivateStaffView, ActivateStaffView, DepartmentListCreateView
+from .views import StaffListView, DeactivateStaffView, ActivateStaffView, DepartmentListCreateView
 from .views import DepartmentDetailView, DepartmentMembershipListCreateView, DepartmentMembershipDetailView, RoleListCreateView
+from .views import TransferDepartmentAdministratorView, DeactivateDepartmentView, ActivateDepartmentView
 
 urlpatterns = [
     path("login/", LoginView.as_view(), name="login"),
@@ -27,7 +28,6 @@ urlpatterns = [
     ),
     path("users/<int:user_id>/", StaffProfileView.as_view(), name="staff-profile"),
     path("users/", StaffListView.as_view(), name="staff-list"),
-    path("admin/users/<int:user_id>/", AdminStaffUpdateView.as_view(), name="admin-staff-update"),
     path("admin/users/<int:user_id>/deactivate/", DeactivateStaffView.as_view(), name="admin-staff-deactivate"),
     path("admin/users/<int:user_id>/activate/", ActivateStaffView.as_view(), name="admin-staff-activate"),
     path("departments/", DepartmentListCreateView.as_view(), name="department-list-create"),
@@ -35,4 +35,17 @@ urlpatterns = [
     path("memberships/", DepartmentMembershipListCreateView.as_view(), name="membership-list-create"),
     path("memberships/<int:membership_id>/", DepartmentMembershipDetailView.as_view(), name="membership-detail"),
     path("roles/", RoleListCreateView.as_view(), name="role-list-create"),
+    path("departments/<int:department_id>/transfer-administrator/", TransferDepartmentAdministratorView.as_view(),
+    name="transfer-department-administrator"),
+    path(
+        "departments/<int:department_id>/deactivate/",
+        DeactivateDepartmentView.as_view(),
+        name="department-deactivate"
+    ),
+
+    path(
+        "departments/<int:department_id>/activate/",
+        ActivateDepartmentView.as_view(),
+        name="department-activate"
+    ),
 ]

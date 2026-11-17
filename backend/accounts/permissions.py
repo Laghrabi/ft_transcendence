@@ -26,5 +26,6 @@ def can_manage_department(user, department_id):
     return DepartmentMembership.objects.filter(
         user=user,
         department_id=department_id,
+        department__is_active=True,
         role__name="Administrator"
     ).exists()

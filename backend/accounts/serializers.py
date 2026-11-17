@@ -4,11 +4,12 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import RolePermission
 from .permissions_catalog import ALLOWED_PERMISSIONS
+from django.db import transaction
 
 
 class RegisterSerializer(serializers.ModelSerializer):
     requested_department = serializers.PrimaryKeyRelatedField(
-        queryset=Department.objects.all(),
+        queryset=Department.objects.filter(is_active=True),
         required=True,
         allow_null=False,
     )
@@ -35,26 +36,6 @@ class RegisterSerializer(serializers.ModelSerializer):
                 "required": True,
             }
         }
-
-    def validate_requested_role(self, value):
-        """
-        Prevent applicants from requesting reserved administrator roles.
-        """
-
-        restricted_roles = {
-            "admin",
-            "administrator",
-            "hospital admin",
-            "hospital administrator",
-            "superuser",
-        }
-
-        if value.name.strip().casefold() in restricted_roles:
-            raise serializers.ValidationError(
-                "This role cannot be requested during registration."
-            )
-
-        return value
 
     def create(self, validated_data):
         """
@@ -174,6 +155,7 @@ class UpdateProfileSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             "name",
+            "email",
             "avatar",
             "phone_number",
             "show_phone_number",
@@ -212,27 +194,30 @@ class AdminStaffListSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
-class AdminStaffUpdateSerializer(serializers.ModelSerializer):
-    """
-    Serialize and validate staff information updates.
-
-    Allows updating a staff member's name and email address.
-    """
-    
-    class Meta:
-        model = User
-        fields = [
-			"name",
-			"email",
-		]
-
 class DepartmentSerializer(serializers.ModelSerializer):
-    """
-    Serialize and validate department information.
 
-    Supports creating, retrieving, and updating departments.
-    The department ID is read-only.
-    """
+    class Meta:
+        model = Department
+
+        fields = [
+            "id",
+            "name",
+            "description",
+            "is_active",
+        ]
+
+        read_only_fields = [
+            "id",
+            "is_active",
+        ]
+
+class DepartmentCreateSerializer(serializers.ModelSerializer):
+
+    administrator = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.all(),
+        write_only=True,
+        required=True,
+    )
 
     class Meta:
         model = Department
@@ -240,9 +225,58 @@ class DepartmentSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "description",
+            "is_active",
+            "administrator",
         ]
-        read_only_fields = ["id"]
+        read_only_fields = ["id", "is_active",]
 
+    def validate_administrator(self, value):
+
+        if not value.is_active or value.approval_status != "approved":
+            raise serializers.ValidationError(
+                "The administrator must be an active, approved user."
+            )
+
+        return value
+
+    def create(self, validated_data):
+
+        administrator = validated_data.pop("administrator")
+
+        with transaction.atomic():
+
+            administrator = (
+                User.objects.select_for_update().filter(
+                    id=administrator.id
+                ).first()
+            )
+
+            if (
+                administrator is None
+                or not administrator.is_active
+                or administrator.approval_status != "approved"
+            ):
+                raise serializers.ValidationError({
+                    "administrator": [
+                        "The administrator must be an active, approved user."
+                    ]
+                })
+
+            administrator_role = Role.objects.get(
+                name="Administrator"
+            )
+
+            department = Department.objects.create(
+                **validated_data
+            )
+
+            DepartmentMembership.objects.create(
+                user=administrator,
+                department=department,
+                role=administrator_role
+            )
+
+        return department
 
 class DepartmentMembershipSerializer(serializers.ModelSerializer):
     """
@@ -292,3 +326,11 @@ class RolePermissionSerializer(serializers.ModelSerializer):
             )
 
         return value
+
+class TransferDepartmentAdministratorSerializer(serializers.Serializer):
+
+    new_administrator = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.all(),
+        required=True
+    )
+    

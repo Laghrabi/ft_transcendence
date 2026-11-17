@@ -11,10 +11,9 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from .serializers import RegisterSerializer, PendingRegistrationSerializer, UserProfileSerializer, UpdateProfileSerializer
 from .models import User, Department, DepartmentMembership, Role
 from django.shortcuts import get_object_or_404
-from .permissions import IsApprovedUser
-from .serializers import StaffListSerializer, AdminStaffUpdateSerializer, AdminStaffListSerializer, DepartmentSerializer
-from django.db.models.deletion import ProtectedError
-from .serializers import DepartmentMembershipSerializer, RoleSerializer
+from .permissions import IsApprovedUser, can_manage_department
+from .serializers import StaffListSerializer, AdminStaffListSerializer, DepartmentSerializer, DepartmentCreateSerializer
+from .serializers import DepartmentMembershipSerializer, RoleSerializer, TransferDepartmentAdministratorSerializer
 from django.db import transaction
 
 @method_decorator(csrf_protect, name="dispatch")
@@ -86,24 +85,6 @@ class LoginView(APIView):
             status=status.HTTP_200_OK
         )
 
-# class LoginView(APIView):
-#     def post(self, request):
-#         email = request.data.get("email")
-#         password = request.data.get("password")
-
-#         user = authenticate(request, email=email, password=password)
-
-#         if user is None or user.approval_status != "approved":
-#             return Response(
-#                 data={"message": "Invalid email or password"},
-#                 status=status.HTTP_401_UNAUTHORIZED
-#             )
-#         login(request, user)
-#         return Response(
-#             data={"message": "Login successful"},
-#             status=status.HTTP_200_OK
-#         )
-
 @method_decorator(csrf_protect, name="dispatch")
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
@@ -164,6 +145,7 @@ class RegisterView(APIView):
         )
 
 class PendingRegistrationsView(APIView):
+
     permission_classes = [IsApprovedUser]
 
     def get(self, request):
@@ -176,7 +158,8 @@ class PendingRegistrationsView(APIView):
 
             admin_departments = DepartmentMembership.objects.filter(
                 user=request.user,
-                role__name="Administrator"
+                role__name="Administrator",
+                department__is_active=True
             ).values_list(
                 "department_id",
                 flat=True
@@ -209,34 +192,68 @@ class PendingRegistrationsView(APIView):
             status=status.HTTP_200_OK
         )
 
-
 @method_decorator(csrf_protect, name="dispatch")
 class ApproveRegistrationView(APIView):
     """
     Approve a pending registration and create its department membership.
 
-    Only approved administrators can approve registrations.
+    Department administrators can approve registrations only for
+    active departments they manage.
+
+    Superusers can approve registrations across active departments.
+
+    Only Nurse and Doctor roles can be approved through registration.
     """
 
     permission_classes = [IsApprovedUser]
 
     def post(self, request, user_id):
+
         if not request.user.is_superuser:
-            return Response(
-                data={"message": "Administrator access required."},
-                status=status.HTTP_403_FORBIDDEN
-            )
+
+            is_department_admin = DepartmentMembership.objects.filter(
+                user=request.user,
+                role__name="Administrator",
+                department__is_active=True
+            ).exists()
+
+            if not is_department_admin:
+                return Response(
+                    data={
+                        "message": "Administrator access required."
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
         with transaction.atomic():
+
             user = get_object_or_404(
                 User.objects.select_for_update(),
                 id=user_id
             )
 
+            if not request.user.is_superuser:
+
+                if not can_manage_department(
+                    request.user,
+                    user.requested_department_id
+                ):
+                    return Response(
+                        data={
+                            "message": (
+                                "You cannot approve registrations "
+                                "for this department."
+                            )
+                        },
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+
             if user.approval_status != "pending":
                 return Response(
                     data={
-                        "message": "Only pending registrations can be approved."
+                        "message": (
+                            "Only pending registrations can be approved."
+                        )
                     },
                     status=status.HTTP_409_CONFLICT
                 )
@@ -255,6 +272,33 @@ class ApproveRegistrationView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+            department = get_object_or_404(
+                Department.objects.select_for_update(),
+                id=user.requested_department_id
+            )
+
+            if not department.is_active:
+                return Response(
+                    data={
+                        "message": (
+                            "Cannot approve registration "
+                            "for an inactive department."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            if user.requested_role.name not in ("Nurse", "Doctor"):
+                return Response(
+                    data={
+                        "message": (
+                            "Only Nurse and Doctor roles can be "
+                            "assigned through registration approval."
+                        )
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
             if DepartmentMembership.objects.filter(user=user).exists():
                 return Response(
                     data={
@@ -267,7 +311,7 @@ class ApproveRegistrationView(APIView):
 
             DepartmentMembership.objects.create(
                 user=user,
-                department_id=user.requested_department_id,
+                department=department,
                 role_id=user.requested_role_id
             )
 
@@ -287,30 +331,74 @@ class ApproveRegistrationView(APIView):
 
 @method_decorator(csrf_protect, name="dispatch")
 class RejectRegistrationView(APIView):
+    """
+    Reject a pending registration.
+
+    Department administrators can reject registrations only
+    for active departments they manage.
+
+    Superusers can reject pending registrations across departments.
+    """
+
     permission_classes = [IsApprovedUser]
 
     def post(self, request, user_id):
-        if request.user.is_superuser is False:
-            return Response(
-                data={
-                    "message": "Administrator access required."
-                },
-                status=status.HTTP_403_FORBIDDEN
+
+        if not request.user.is_superuser:
+
+            is_administrator = DepartmentMembership.objects.filter(
+                user=request.user,
+                role__name="Administrator",
+                department__is_active=True
+            ).exists()
+
+            if not is_administrator:
+                return Response(
+                    data={
+                        "message": "Administrator access required."
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        with transaction.atomic():
+
+            user = get_object_or_404(
+                User.objects.select_for_update(),
+                id=user_id
             )
 
-        user = get_object_or_404(User, id=user_id)
+            if not request.user.is_superuser:
 
-        if user.approval_status != "pending":
-            return Response(
-                data={
-                    "message": "Only pending registrations can be rejected."
-                },
-                status=status.HTTP_409_CONFLICT
+                if not can_manage_department(
+                    request.user,
+                    user.requested_department_id
+                ):
+                    return Response(
+                        data={
+                            "message": (
+                                "You cannot reject registrations "
+                                "for this department."
+                            )
+                        },
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+
+            if user.approval_status != "pending":
+                return Response(
+                    data={
+                        "message": (
+                            "Only pending registrations can be rejected."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            user.approval_status = "rejected"
+            user.is_active = False
+
+            user.save(
+                update_fields=["approval_status", "is_active"]
             )
-
-        user.approval_status = "rejected"
-        user.is_active = False
-        user.save(update_fields=["approval_status", "is_active"])
 
         return Response(
             data={
@@ -319,7 +407,6 @@ class RejectRegistrationView(APIView):
             },
             status=status.HTTP_200_OK
         )
-
 
 class StaffProfileView(APIView):
     """
@@ -375,134 +462,154 @@ class StaffListView(APIView):
         )
 
 @method_decorator(csrf_protect, name="dispatch")
-class AdminStaffUpdateView(APIView):
-    """
-    Allow administrators to update approved staff members' information.
-
-    Access is restricted to authenticated, approved users with
-    superuser privileges. Supports partial updates using PATCH.
-    """
-
-    permission_classes = [IsApprovedUser]
-
-    def patch(self, request, user_id):
-        """Validate and update the name or email of an approved staff member."""
-
-        if request.user.is_superuser is False:
-            return Response(
-                data={
-                    "message": "Administrator access required."
-                },
-                status=status.HTTP_403_FORBIDDEN
-            )
-        user = get_object_or_404(User, id=user_id, approval_status="approved")
-        serializer = AdminStaffUpdateSerializer(user, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-@method_decorator(csrf_protect, name="dispatch")
 class DeactivateStaffView(APIView):
     """
-    Allow administrators to deactivate approved staff accounts.
+    Allow superusers to deactivate approved staff accounts.
 
-    Access is restricted to authenticated, approved users with
-    superuser privileges. Prevents self-deactivation and returns
-    an error if the target account is already inactive.
+    A staff member cannot be deactivated while they are
+    an Administrator of any department.
+
+    Administrative responsibilities must be transferred first.
     """
 
     permission_classes = [IsApprovedUser]
 
     def post(self, request, user_id):
-        """Deactivate an approved staff account by setting is_active to False."""
 
-        if request.user.is_superuser is False:
+        if not request.user.is_superuser:
             return Response(
                 data={
-                        "message": "Administrator access required."
-                    },
-                    status=status.HTTP_403_FORBIDDEN
-                )
-        if request.user.id == user_id:
-            return Response(
-                data={
-                     "message": "You cannot deactivate your own account."
+                    "message": "Superuser access required."
                 },
                 status=status.HTTP_403_FORBIDDEN
             )
-        user = get_object_or_404(User, id=user_id, approval_status="approved")
-        if user.is_active is False:
+
+        if request.user.id == user_id:
             return Response(
-                data= {"message": "This account is already deactivated."},
-                status=status.HTTP_409_CONFLICT
+                data={
+                    "message": "You cannot deactivate your own account."
+                },
+                status=status.HTTP_403_FORBIDDEN
             )
-        user.is_active = False
-        user.save(update_fields=["is_active"])
+
+        with transaction.atomic():
+
+            user = get_object_or_404(
+                User.objects.select_for_update(),
+                id=user_id,
+                approval_status="approved"
+            )
+
+            if not user.is_active:
+                return Response(
+                    data={
+                        "message": "This account is already deactivated."
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            is_department_administrator = (
+                DepartmentMembership.objects.filter(
+                    user=user,
+                    role__name="Administrator"
+                ).exists()
+            )
+
+            if is_department_administrator:
+                return Response(
+                    data={
+                        "message": (
+                            "Cannot deactivate this staff member. "
+                            "Transfer their department Administrator "
+                            "responsibilities first."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            user.is_active = False
+
+            user.save(
+                update_fields=["is_active"]
+            )
 
         return Response(
-            data={"message": "Staff account deactivated successfully."}, status=status.HTTP_200_OK)
+            data={
+                "message": "Staff account deactivated successfully."
+            },
+            status=status.HTTP_200_OK
+        )
 
 @method_decorator(csrf_protect, name="dispatch")
 class ActivateStaffView(APIView):
     """
-    Allow administrators to activate approved staff accounts.
+    Allow superusers to reactivate approved staff accounts.
 
-    Access is restricted to authenticated, approved users with
-    superuser privileges. Returns an error if the target account
-    is already active.
+    Only approved accounts can be reactivated.
     """
 
     permission_classes = [IsApprovedUser]
 
     def post(self, request, user_id):
-        """Activate an approved staff account by setting is_active to True."""
 
-        if request.user.is_superuser is False:
+        if not request.user.is_superuser:
             return Response(
                 data={
-                        "message": "Administrator access required."
-                    },
-                    status=status.HTTP_403_FORBIDDEN
-                )
-        user = get_object_or_404(User, id=user_id, approval_status="approved")
-        if user.is_active is True:
-            return Response(
-                data= {"message": "This account is already activated."},
-                status=status.HTTP_409_CONFLICT
+                    "message": "Superuser access required."
+                },
+                status=status.HTTP_403_FORBIDDEN
             )
-        user.is_active = True
-        user.save(update_fields=["is_active"])
+
+        with transaction.atomic():
+
+            user = get_object_or_404(
+                User.objects.select_for_update(),
+                id=user_id,
+                approval_status="approved"
+            )
+
+            if user.is_active:
+                return Response(
+                    data={
+                        "message": "This account is already activated."
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            user.is_active = True
+
+            user.save(
+                update_fields=["is_active"]
+            )
 
         return Response(
-            data={"message": "Staff account activated successfully."}, status=status.HTTP_200_OK)
-
-
+            data={
+                "message": "Staff account activated successfully."
+            },
+            status=status.HTTP_200_OK
+        )
 
 @method_decorator(csrf_protect, name="dispatch")
 class DepartmentListCreateView(APIView):
     """
-    Manage department listing and creation.
+    List and create departments.
 
-    Anyone can retrieve departments ordered by ID.
-    Only approved administrators can create departments.
+    Anyone can list departments.
+
+    Superusers and approved department administrators
+    can create departments and appoint their Administrator.
     """
 
     permission_classes = [IsApprovedUser]
 
     def get_permissions(self):
-        """
-        Allow public GET requests.
 
-        Require an approved user for other methods.
-        """
         if self.request.method == "GET":
             return [AllowAny()]
 
         return super().get_permissions()
 
     def get(self, request):
-        """Return a list of all departments ordered by ID."""
 
         departments = Department.objects.all().order_by("id")
 
@@ -517,17 +624,27 @@ class DepartmentListCreateView(APIView):
         )
 
     def post(self, request):
-        """
-        Allow approved administrators to create departments.
-        """
 
         if not request.user.is_superuser:
-            return Response(
-                data={"message": "Administrator access required."},
-                status=status.HTTP_403_FORBIDDEN
-            )
 
-        serializer = DepartmentSerializer(data=request.data)
+            is_administrator = DepartmentMembership.objects.filter(
+                user=request.user,
+                role__name="Administrator",
+                department__is_active=True
+            ).exists()
+
+            if not is_administrator:
+                return Response(
+                    data={
+                        "message": "Administrator access required."
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        serializer = DepartmentCreateSerializer(
+            data=request.data
+        )
+
         serializer.is_valid(raise_exception=True)
         serializer.save()
 
@@ -539,7 +656,7 @@ class DepartmentListCreateView(APIView):
 @method_decorator(csrf_protect, name="dispatch")
 class DepartmentDetailView(APIView):
     """
-    Manage updates and deletion of existing departments.
+    Manage updates of existing departments.
 
     Access is restricted to approved administrators.
     Supports partial updates and prevents deletion of departments
@@ -549,7 +666,12 @@ class DepartmentDetailView(APIView):
     permission_classes = [IsApprovedUser]
 
     def patch(self, request, department_id):
-        """Validate and partially update a department by its ID."""
+        """
+        Update an active department's name or description.
+
+        Only system superusers can update department information.
+        Inactive departments cannot be modified.
+        """
 
         if not request.user.is_superuser:
             return Response(
@@ -557,73 +679,49 @@ class DepartmentDetailView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        department = get_object_or_404(
-            Department,
-            id=department_id
-        )
+        with transaction.atomic():
 
-        serializer = DepartmentSerializer(
-            department,
-            data=request.data,
-            partial=True
-        )
+            department = get_object_or_404(
+                Department.objects.select_for_update(),
+                id=department_id
+            )
 
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
+            if not department.is_active:
+                return Response(
+                    data={
+                        "message": "Cannot edit an inactive department."
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            serializer = DepartmentSerializer(
+                department,
+                data=request.data,
+                partial=True
+            )
+
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
 
         return Response(
             serializer.data,
             status=status.HTTP_200_OK
         )
 
-    
-    def delete(self, request, department_id):
-        """Delete a department unless existing staff memberships protect it."""
-
-        if not request.user.is_superuser:
-            return Response(
-                data={"message": "Administrator access required."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-        department = get_object_or_404(
-            Department,
-            id=department_id
-        )
-
-        try:
-            department.delete()
-        except ProtectedError:
-            return Response(
-                data={
-                    "message": "Cannot delete a department with assigned staff members."
-                },
-                status=status.HTTP_409_CONFLICT
-            )
-
-        return Response(status=status.HTTP_204_NO_CONTENT)
-
-
 @method_decorator(csrf_protect, name="dispatch")
 class DepartmentMembershipListCreateView(APIView):
     """
-    Manage department membership listing and creation.
+    List and create department memberships.
 
-    Approved users can view memberships, optionally filtered by
-    department. Administrators can view all memberships, including
-    those of inactive or unapproved users, and assign active,
-    approved staff members to departments.
+    Approved users can view memberships.
+
+    Superusers can create memberships, but each department
+    can have only one Administrator.
     """
 
     permission_classes = [IsApprovedUser]
 
     def get(self, request):
-        """
-        Return memberships ordered by ID with optional department filtering.
-
-        Non-administrators can only view memberships belonging to
-        active, approved staff members.
-        """
 
         memberships = DepartmentMembership.objects.all().order_by("id")
 
@@ -636,9 +734,14 @@ class DepartmentMembershipListCreateView(APIView):
         department_id = request.query_params.get("department_id")
 
         if department_id is not None:
+
             if not department_id.isdecimal() or int(department_id) < 1:
                 return Response(
-                    data={"department_id": ["A positive integer is required."]},
+                    data={
+                        "department_id": [
+                            "A positive integer is required."
+                        ]
+                    },
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
@@ -657,18 +760,22 @@ class DepartmentMembershipListCreateView(APIView):
         )
 
     def post(self, request):
-        """
-        Create a department membership with administrator privileges.
-
-        Only active, approved staff members can be assigned
-        to departments.
-        """
 
         if not request.user.is_superuser:
-            return Response(
-                data={"message": "Administrator access required."},
-                status=status.HTTP_403_FORBIDDEN
-            )
+
+            is_administrator = DepartmentMembership.objects.filter(
+                user=request.user,
+                role__name="Administrator",
+                department__is_active=True
+            ).exists()
+
+            if not is_administrator:
+                return Response(
+                    data={
+                        "message": "Administrator access required."
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
         serializer = DepartmentMembershipSerializer(
             data=request.data
@@ -677,65 +784,247 @@ class DepartmentMembershipListCreateView(APIView):
         serializer.is_valid(raise_exception=True)
 
         user = serializer.validated_data["user"]
+        department = serializer.validated_data["department"]
+        role = serializer.validated_data["role"]
 
-        if not user.is_active or user.approval_status != "approved":
-            return Response(
-                data={
-                    "user": [
-                        "Only active, approved staff can be assigned to departments."
-                    ]
-                },
-                status=status.HTTP_400_BAD_REQUEST
+        with transaction.atomic():
+
+            department = get_object_or_404(
+                Department.objects.select_for_update(),
+                id=department.id
             )
 
-        serializer.save()
+            if not department.is_active:
+                return Response(
+                    data={
+                        "message": (
+                            "Cannot modify memberships "
+                            "of an inactive department."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            if not request.user.is_superuser:
+
+                if not can_manage_department(
+                    request.user,
+                    department.id
+                ):
+                    return Response(
+                        data={
+                            "message": (
+                                "You cannot add staff "
+                                "to this department."
+                            )
+                        },
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+
+            user = get_object_or_404(
+                User.objects.select_for_update(),
+                id=user.id
+            )
+
+            if not user.is_active or user.approval_status != "approved":
+                return Response(
+                    data={
+                        "user": [
+                            "Only active, approved staff can be "
+                            "assigned to departments."
+                        ]
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if DepartmentMembership.objects.filter(
+                user=user,
+                department=department
+            ).exists():
+                return Response(
+                    data={
+                        "message": (
+                            "This user already belongs "
+                            "to this department."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            if role.name == "Administrator":
+
+                administrator_exists = DepartmentMembership.objects.filter(
+                    department=department,
+                    role__name="Administrator"
+                ).exists()
+
+                if administrator_exists:
+                    return Response(
+                        data={
+                            "message": (
+                                "This department already has "
+                                "an Administrator."
+                            )
+                        },
+                        status=status.HTTP_409_CONFLICT
+                    )
+
+            serializer.validated_data["user"] = user
+            serializer.validated_data["department"] = department
+
+            serializer.save()
 
         return Response(
             serializer.data,
             status=status.HTTP_201_CREATED
         )
 
-
 @method_decorator(csrf_protect, name="dispatch")
 class DepartmentMembershipDetailView(APIView):
     """
-    Manage updates and deletion of department memberships.
+    Manage department membership role updates and deletion.
 
-    Access is restricted to approved administrators.
-    Supports updating only the role assigned to a membership
-    and removing staff members from departments.
+    Superusers can change roles across all departments.
+
+    Department administrators can change roles only within
+    departments they manage.
+
+    Each department must have exactly one Administrator.
     """
 
     permission_classes = [IsApprovedUser]
 
     def patch(self, request, membership_id):
-        """Update only the role of an existing department membership."""
 
         if not request.user.is_superuser:
-            return Response(
-                data={"message": "Administrator access required."},
-                status=status.HTTP_403_FORBIDDEN
-            )
 
-        membership = get_object_or_404(
-            DepartmentMembership,
-            id=membership_id
-        )
+            is_administrator = DepartmentMembership.objects.filter(
+                user=request.user,
+                role__name="Administrator",
+                department__is_active=True
+            ).exists()
+
+            if not is_administrator:
+                return Response(
+                    data={
+                        "message": "Administrator access required."
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
         if set(request.data.keys()) != {"role"}:
             return Response(
-                data={"message": "Only the role field can be updated."},
+                data={
+                    "message": "Only the role field can be updated."
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        serializer = DepartmentMembershipSerializer(
-            membership,
-            data=request.data,
-            partial=True
-        )
+        with transaction.atomic():
 
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
+            membership = get_object_or_404(
+                DepartmentMembership,
+                id=membership_id
+            )
+
+            department = get_object_or_404(
+                Department.objects.select_for_update(),
+                id=membership.department_id
+            )
+
+            if not department.is_active:
+                return Response(
+                    data={
+                        "message": (
+                            "Cannot modify memberships "
+                            "of an inactive department."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            membership = get_object_or_404(
+                DepartmentMembership.objects.select_for_update(),
+                id=membership_id,
+                department=department
+            )
+
+            if not request.user.is_superuser:
+
+                if not can_manage_department(
+                    request.user,
+                    membership.department_id
+                ):
+                    return Response(
+                        data={
+                            "message": (
+                                "You cannot modify memberships "
+                                "in this department."
+                            )
+                        },
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+
+            serializer = DepartmentMembershipSerializer(
+                membership,
+                data=request.data,
+                partial=True
+            )
+
+            serializer.is_valid(raise_exception=True)
+
+            new_role = serializer.validated_data["role"]
+            current_role = membership.role
+
+            if (
+                current_role.name == "Administrator"
+                and new_role.name != "Administrator"
+            ):
+
+                another_administrator_exists = (
+                    DepartmentMembership.objects.filter(
+                        department=department,
+                        role__name="Administrator"
+                    ).exclude(
+                        id=membership.id
+                    ).exists()
+                )
+
+                if not another_administrator_exists:
+                    return Response(
+                        data={
+                            "message": (
+                                "Cannot remove the department's "
+                                "only Administrator."
+                            )
+                        },
+                        status=status.HTTP_409_CONFLICT
+                    )
+
+            if (
+                current_role.name != "Administrator"
+                and new_role.name == "Administrator"
+            ):
+
+                administrator_exists = (
+                    DepartmentMembership.objects.filter(
+                        department=department,
+                        role__name="Administrator"
+                    ).exists()
+                )
+
+                if administrator_exists:
+                    return Response(
+                        data={
+                            "message": (
+                                "This department already has "
+                                "an Administrator."
+                            )
+                        },
+                        status=status.HTTP_409_CONFLICT
+                    )
+
+            serializer.save()
 
         return Response(
             serializer.data,
@@ -743,20 +1032,91 @@ class DepartmentMembershipDetailView(APIView):
         )
 
     def delete(self, request, membership_id):
-        """Remove an existing department membership by its ID."""
-        
+
         if not request.user.is_superuser:
-            return Response(
-                data={"message": "Administrator access required."},
-                status=status.HTTP_403_FORBIDDEN
+
+            is_administrator = DepartmentMembership.objects.filter(
+                user=request.user,
+                role__name="Administrator",
+                department__is_active=True
+            ).exists()
+
+            if not is_administrator:
+                return Response(
+                    data={
+                        "message": "Administrator access required."
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        with transaction.atomic():
+
+            membership = get_object_or_404(
+                DepartmentMembership,
+                id=membership_id
             )
 
-        membership = get_object_or_404(
-            DepartmentMembership,
-            id=membership_id
-        )
+            department = get_object_or_404(
+                Department.objects.select_for_update(),
+                id=membership.department_id
+            )
 
-        membership.delete()
+            if not department.is_active:
+                return Response(
+                    data={
+                        "message": (
+                            "Cannot modify memberships "
+                            "of an inactive department."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            membership = get_object_or_404(
+                DepartmentMembership.objects.select_for_update(),
+                id=membership_id,
+                department=department
+            )
+
+            if not request.user.is_superuser:
+
+                if not can_manage_department(
+                    request.user,
+                    membership.department_id
+                ):
+                    return Response(
+                        data={
+                            "message": (
+                                "You cannot remove staff "
+                                "from this department."
+                            )
+                        },
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+
+            if membership.role.name == "Administrator":
+
+                another_administrator_exists = (
+                    DepartmentMembership.objects.filter(
+                        department=department,
+                        role__name="Administrator"
+                    ).exclude(
+                        id=membership.id
+                    ).exists()
+                )
+
+                if not another_administrator_exists:
+                    return Response(
+                        data={
+                            "message": (
+                                "Cannot delete the department's "
+                                "only Administrator."
+                            )
+                        },
+                        status=status.HTTP_409_CONFLICT
+                    )
+
+            membership.delete()
 
         return Response(
             status=status.HTTP_204_NO_CONTENT
@@ -775,6 +1135,245 @@ class RoleListCreateView(APIView):
 
         return Response(
             serializer.data,
+            status=status.HTTP_200_OK
+        )
+
+@method_decorator(csrf_protect, name="dispatch")
+class TransferDepartmentAdministratorView(APIView):
+    """
+    Transfer department administration to another staff member.
+
+    Only the superuser or the current department Administrator
+    can perform this operation.
+
+    The previous Administrator's department membership is deleted,
+    but their user account is preserved.
+    """
+
+    permission_classes = [IsApprovedUser]
+
+    def post(self, request, department_id):
+
+        with transaction.atomic():
+
+            department = get_object_or_404(
+                Department.objects.select_for_update(),
+                id=department_id
+            )
+
+            if not department.is_active:
+                return Response(
+                    data={
+                        "message": (
+                            "Cannot transfer administration "
+                            "of an inactive department."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            if not request.user.is_superuser:
+
+                if not can_manage_department(
+                    request.user,
+                    department.id
+                ):
+                    return Response(
+                        data={
+                            "message": (
+                                "You cannot transfer administration "
+                                "of this department."
+                            )
+                        },
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+
+            serializer = TransferDepartmentAdministratorSerializer(
+                data=request.data
+            )
+
+            serializer.is_valid(raise_exception=True)
+
+            new_administrator = serializer.validated_data[
+                "new_administrator"
+            ]
+
+            new_administrator = get_object_or_404(
+                User.objects.select_for_update(),
+                id=new_administrator.id
+            )
+
+            if (
+                not new_administrator.is_active
+                or new_administrator.approval_status != "approved"
+            ):
+                return Response(
+                    data={
+                        "message": (
+                            "The new Administrator must be "
+                            "an active, approved user."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            administrator_role = Role.objects.get(
+                name="Administrator"
+            )
+
+            current_administrators = (
+                DepartmentMembership.objects.select_for_update().filter(
+                    department=department,
+                    role=administrator_role
+                )
+            )
+
+            if current_administrators.count() != 1:
+                return Response(
+                    data={
+                        "message": (
+                            "This department must have exactly one "
+                            "current Administrator before transferring."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            current_membership = current_administrators.first()
+
+            if current_membership.user_id == new_administrator.id:
+                return Response(
+                    data={
+                        "message": (
+                            "The selected user is already "
+                            "this department's Administrator."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            new_membership = (
+                DepartmentMembership.objects.select_for_update().filter(
+                    user=new_administrator,
+                    department=department
+                ).first()
+            )
+
+            previous_administrator_id = current_membership.user_id
+
+            current_membership.delete()
+
+            if new_membership is None:
+
+                DepartmentMembership.objects.create(
+                    user=new_administrator,
+                    department=department,
+                    role=administrator_role
+                )
+
+            else:
+
+                new_membership.role = administrator_role
+
+                new_membership.save(
+                    update_fields=["role"]
+                )
+
+        return Response(
+            data={
+                "message": (
+                    "Department administration transferred successfully."
+                ),
+                "department_id": department.id,
+                "previous_administrator_id": previous_administrator_id,
+                "new_administrator_id": new_administrator.id
+            },
+            status=status.HTTP_200_OK
+        )
+
+@method_decorator(csrf_protect, name="dispatch")
+class DeactivateDepartmentView(APIView):
+
+    permission_classes = [IsApprovedUser]
+
+    def post(self, request, department_id):
+
+        if not request.user.is_superuser:
+            return Response(
+                data={
+                    "message": "Superuser access required."
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        with transaction.atomic():
+
+            department = get_object_or_404(
+                Department.objects.select_for_update(),
+                id=department_id
+            )
+
+            if not department.is_active:
+                return Response(
+                    data={
+                        "message": "This department is already inactive."
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            department.is_active = False
+
+            department.save(
+                update_fields=["is_active"]
+            )
+
+        return Response(
+            data={
+                "message": "Department deactivated successfully."
+            },
+            status=status.HTTP_200_OK
+        )
+
+@method_decorator(csrf_protect, name="dispatch")
+class ActivateDepartmentView(APIView):
+
+    permission_classes = [IsApprovedUser]
+
+    def post(self, request, department_id):
+
+        if not request.user.is_superuser:
+            return Response(
+                data={
+                    "message": "Superuser access required."
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        with transaction.atomic():
+
+            department = get_object_or_404(
+                Department.objects.select_for_update(),
+                id=department_id
+            )
+
+            if department.is_active:
+                return Response(
+                    data={
+                        "message": "This department is already active."
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            department.is_active = True
+
+            department.save(
+                update_fields=["is_active"]
+            )
+
+        return Response(
+            data={
+                "message": "Department activated successfully."
+            },
             status=status.HTTP_200_OK
         )
 

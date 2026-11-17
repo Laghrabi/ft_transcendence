@@ -1640,7 +1640,375 @@ class ApproveRegistrationTests(TestCase):
 
         self.assertEqual(response.status_code, 405)
 
+class DepartmentScopedApprovalTests(TestCase):
 
+    @classmethod
+    def setUpTestData(cls):
+        User = get_user_model()
+
+        # Departments
+        cls.emergency = Department.objects.create(
+            name="Emergency"
+        )
+
+        cls.cardiology = Department.objects.create(
+            name="Cardiology"
+        )
+
+        # Predefined roles
+        cls.administrator_role = Role.objects.get(
+            name="Administrator"
+        )
+
+        cls.nurse_role = Role.objects.get(
+            name="Nurse"
+        )
+
+        # Emergency administrator
+        cls.emergency_admin = User.objects.create_user(
+            email="emergency.admin@example.com",
+            password="StrongTestPassword123!",
+            name="Emergency Administrator",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        # Cardiology administrator
+        cls.cardiology_admin = User.objects.create_user(
+            email="cardiology.admin@example.com",
+            password="StrongTestPassword123!",
+            name="Cardiology Administrator",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        # Regular nurse
+        cls.nurse = User.objects.create_user(
+            email="nurse@example.com",
+            password="StrongTestPassword123!",
+            name="Emergency Nurse",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        # Django staff user without Administrator role
+        cls.staff_user = User.objects.create_user(
+            email="staff@example.com",
+            password="StrongTestPassword123!",
+            name="Django Staff Member",
+            approval_status="approved",
+            is_active=True,
+            is_staff=True,
+        )
+
+        # Pending department administrator
+        cls.pending_admin = User.objects.create_user(
+            email="pending.admin@example.com",
+            password="StrongTestPassword123!",
+            name="Pending Administrator",
+            approval_status="pending",
+            is_active=True,
+        )
+
+        # System superuser
+        cls.superuser = User.objects.create_superuser(
+            email="superuser@example.com",
+            password="StrongTestPassword123!",
+            name="System Administrator",
+        )
+
+        # Department administrator memberships
+        DepartmentMembership.objects.create(
+            user=cls.emergency_admin,
+            department=cls.emergency,
+            role=cls.administrator_role,
+        )
+
+        DepartmentMembership.objects.create(
+            user=cls.cardiology_admin,
+            department=cls.cardiology,
+            role=cls.administrator_role,
+        )
+
+        DepartmentMembership.objects.create(
+            user=cls.pending_admin,
+            department=cls.emergency,
+            role=cls.administrator_role,
+        )
+
+        # Regular nurse membership
+        DepartmentMembership.objects.create(
+            user=cls.nurse,
+            department=cls.emergency,
+            role=cls.nurse_role,
+        )
+
+        # Emergency registration
+        cls.pending_emergency = User.objects.create_user(
+            email="applicant.emergency@example.com",
+            password="StrongTestPassword123!",
+            name="Emergency Applicant",
+            requested_department=cls.emergency,
+            requested_role=cls.nurse_role,
+        )
+
+        # Cardiology registration
+        cls.pending_cardiology = User.objects.create_user(
+            email="applicant.cardiology@example.com",
+            password="StrongTestPassword123!",
+            name="Cardiology Applicant",
+            requested_department=cls.cardiology,
+            requested_role=cls.nurse_role,
+        )
+
+        # Registration requesting Administrator privileges
+        cls.pending_administrator_role = User.objects.create_user(
+            email="applicant.admin@example.com",
+            password="StrongTestPassword123!",
+            name="Administrator Applicant",
+            requested_department=cls.emergency,
+            requested_role=cls.administrator_role,
+        )
+
+    def setUp(self):
+        self.client = Client(enforce_csrf_checks=True)
+
+    # =====================================================
+    # Helpers
+    # =====================================================
+
+    def approval_url(self, user_id):
+        return f"/api/auth/registrations/{user_id}/approve/"
+
+    def get_csrf_token(self):
+        response = self.client.get("/api/auth/csrf/")
+
+        self.assertEqual(response.status_code, 200)
+
+        return response.json()["csrf_token"]
+
+    def approve_as(self, actor, applicant):
+        self.client.force_login(actor)
+
+        token = self.get_csrf_token()
+
+        return self.client.post(
+            self.approval_url(applicant.id),
+            HTTP_X_CSRFTOKEN=token,
+        )
+
+    def assert_registration_unchanged(self, applicant):
+        applicant.refresh_from_db()
+
+        self.assertEqual(
+            applicant.approval_status,
+            "pending",
+        )
+
+        self.assertFalse(applicant.is_active)
+
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=applicant
+            ).exists()
+        )
+
+    # =====================================================
+    # Department administrator approval
+    # =====================================================
+
+    def test_admin_can_approve_own_department(self):
+        response = self.approve_as(
+            self.emergency_admin,
+            self.pending_emergency,
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.pending_emergency.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_emergency.approval_status,
+            "approved",
+        )
+
+        self.assertTrue(self.pending_emergency.is_active)
+
+        membership = DepartmentMembership.objects.get(
+            user=self.pending_emergency
+        )
+
+        self.assertEqual(
+            membership.department,
+            self.emergency,
+        )
+
+        self.assertEqual(
+            membership.role,
+            self.nurse_role,
+        )
+
+    def test_admin_cannot_approve_other_department(self):
+        response = self.approve_as(
+            self.emergency_admin,
+            self.pending_cardiology,
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.assertEqual(
+            response.json()["message"],
+            "You cannot approve registrations for this department.",
+        )
+
+        self.assert_registration_unchanged(
+            self.pending_cardiology
+        )
+
+    def test_admin_can_approve_multiple_managed_departments(self):
+        DepartmentMembership.objects.create(
+            user=self.emergency_admin,
+            department=self.cardiology,
+            role=self.administrator_role,
+        )
+
+        response = self.approve_as(
+            self.emergency_admin,
+            self.pending_cardiology,
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.pending_cardiology.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_cardiology.approval_status,
+            "approved",
+        )
+
+        self.assertTrue(self.pending_cardiology.is_active)
+
+        self.assertTrue(
+            DepartmentMembership.objects.filter(
+                user=self.pending_cardiology,
+                department=self.cardiology,
+                role=self.nurse_role,
+            ).exists()
+        )
+
+    def test_department_admin_does_not_require_is_staff(self):
+        self.assertFalse(self.emergency_admin.is_staff)
+        self.assertFalse(self.emergency_admin.is_superuser)
+
+        response = self.approve_as(
+            self.emergency_admin,
+            self.pending_emergency,
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+    # =====================================================
+    # System superuser
+    # =====================================================
+
+    def test_superuser_can_approve_any_department(self):
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.superuser
+            ).exists()
+        )
+
+        response = self.approve_as(
+            self.superuser,
+            self.pending_cardiology,
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.pending_cardiology.refresh_from_db()
+
+        self.assertEqual(
+            self.pending_cardiology.approval_status,
+            "approved",
+        )
+
+        self.assertTrue(self.pending_cardiology.is_active)
+
+    # =====================================================
+    # Unauthorized users
+    # =====================================================
+
+    def test_regular_nurse_cannot_approve(self):
+        response = self.approve_as(
+            self.nurse,
+            self.pending_emergency,
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.assert_registration_unchanged(
+            self.pending_emergency
+        )
+
+    def test_is_staff_alone_cannot_approve(self):
+        response = self.approve_as(
+            self.staff_user,
+            self.pending_emergency,
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.assert_registration_unchanged(
+            self.pending_emergency
+        )
+
+    def test_pending_department_admin_cannot_approve(self):
+        response = self.approve_as(
+            self.pending_admin,
+            self.pending_emergency,
+        )
+
+        self.assertIn(response.status_code, [401, 403])
+
+        self.assert_registration_unchanged(
+            self.pending_emergency
+        )
+
+    # =====================================================
+    # Administrator role protection
+    # =====================================================
+
+    def test_department_admin_cannot_approve_administrator_role(self):
+        response = self.approve_as(
+            self.emergency_admin,
+            self.pending_administrator_role,
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.assert_registration_unchanged(
+            self.pending_administrator_role
+        )
+
+    def test_superuser_cannot_approve_administrator_role(self):
+        response = self.approve_as(
+            self.superuser,
+            self.pending_administrator_role,
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+        self.assertEqual(
+            response.json()["message"],
+            (
+                "Administrator roles cannot be assigned "
+                "through registration approval."
+            ),
+        )
+
+        self.assert_registration_unchanged(
+            self.pending_administrator_role
+        )
 
 class RejectRegistrationTests(TestCase):
 
@@ -2139,6 +2507,375 @@ class RejectRegistrationTests(TestCase):
 
         self.assertEqual(list_response.status_code, 200)
         self.assertEqual(list_response.json(), [])
+
+class DepartmentScopedRejectionTests(TestCase):
+
+    @classmethod
+    def setUpTestData(cls):
+        User = get_user_model()
+
+        # Departments
+        cls.emergency = Department.objects.create(
+            name="Emergency"
+        )
+
+        cls.cardiology = Department.objects.create(
+            name="Cardiology"
+        )
+
+        # Roles already created by migration 0007
+        cls.nurse_role = Role.objects.get(
+            name="Nurse"
+        )
+
+        cls.administrator_role = Role.objects.get(
+            name="Administrator"
+        )
+
+        # System superuser
+        cls.superuser = User.objects.create_superuser(
+            email="superuser@example.com",
+            name="System Administrator",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+        )
+
+        # Emergency administrator
+        cls.emergency_admin = User.objects.create_user(
+            email="emergency.admin@example.com",
+            name="Emergency Administrator",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        DepartmentMembership.objects.create(
+            user=cls.emergency_admin,
+            department=cls.emergency,
+            role=cls.administrator_role,
+        )
+
+        # Regular nurse
+        cls.nurse = User.objects.create_user(
+            email="nurse@example.com",
+            name="Regular Nurse",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        DepartmentMembership.objects.create(
+            user=cls.nurse,
+            department=cls.emergency,
+            role=cls.nurse_role,
+        )
+
+        # User with is_staff=True but no Administrator role
+        cls.staff_user = User.objects.create_user(
+            email="staff@example.com",
+            name="Django Staff User",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+            is_staff=True,
+        )
+
+        # Pending department administrator
+        cls.pending_admin = User.objects.create_user(
+            email="pending.admin@example.com",
+            name="Pending Administrator",
+            password="StrongTestPassword123!",
+            approval_status="pending",
+            is_active=True,
+        )
+
+        DepartmentMembership.objects.create(
+            user=cls.pending_admin,
+            department=cls.emergency,
+            role=cls.administrator_role,
+        )
+
+        # Applicant requesting Emergency
+        cls.emergency_applicant = User.objects.create_user(
+            email="emergency.applicant@example.com",
+            name="Emergency Applicant",
+            password="StrongTestPassword123!",
+            approval_status="pending",
+            is_active=False,
+            requested_department=cls.emergency,
+            requested_role=cls.nurse_role,
+        )
+
+        # Applicant requesting Cardiology
+        cls.cardiology_applicant = User.objects.create_user(
+            email="cardiology.applicant@example.com",
+            name="Cardiology Applicant",
+            password="StrongTestPassword123!",
+            approval_status="pending",
+            is_active=False,
+            requested_department=cls.cardiology,
+            requested_role=cls.nurse_role,
+        )
+
+    def setUp(self):
+        self.client = Client(enforce_csrf_checks=True)
+
+    def reject_as(self, administrator, applicant):
+        self.client.force_login(administrator)
+
+        self.client.get("/api/auth/csrf/")
+
+        csrf_token = self.client.cookies["csrftoken"].value
+
+        return self.client.post(
+            reverse(
+                "reject-registration",
+                kwargs={"user_id": applicant.id}
+            ),
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+
+    def assert_still_pending(self, applicant):
+        applicant.refresh_from_db()
+
+        self.assertEqual(
+            applicant.approval_status,
+            "pending"
+        )
+
+        self.assertFalse(applicant.is_active)
+
+    # =====================================================
+    # 1. Administrator can reject own department
+    # =====================================================
+
+    def test_admin_can_reject_own_department(self):
+        response = self.reject_as(
+            self.emergency_admin,
+            self.emergency_applicant
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK
+        )
+
+        self.emergency_applicant.refresh_from_db()
+
+        self.assertEqual(
+            self.emergency_applicant.approval_status,
+            "rejected"
+        )
+
+        self.assertFalse(
+            self.emergency_applicant.is_active
+        )
+
+    # =====================================================
+    # 2. Administrator cannot reject another department
+    # =====================================================
+
+    def test_admin_cannot_reject_other_department(self):
+        response = self.reject_as(
+            self.emergency_admin,
+            self.cardiology_applicant
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        self.assert_still_pending(
+            self.cardiology_applicant
+        )
+
+    # =====================================================
+    # 3. Administrator can manage multiple departments
+    # =====================================================
+
+    def test_admin_can_reject_multiple_managed_departments(self):
+        DepartmentMembership.objects.create(
+            user=self.emergency_admin,
+            department=self.cardiology,
+            role=self.administrator_role,
+        )
+
+        response = self.reject_as(
+            self.emergency_admin,
+            self.cardiology_applicant
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK
+        )
+
+        self.cardiology_applicant.refresh_from_db()
+
+        self.assertEqual(
+            self.cardiology_applicant.approval_status,
+            "rejected"
+        )
+
+    # =====================================================
+    # 4. Superuser can reject any department
+    # =====================================================
+
+    def test_superuser_can_reject_any_department(self):
+        response = self.reject_as(
+            self.superuser,
+            self.cardiology_applicant
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK
+        )
+
+        self.cardiology_applicant.refresh_from_db()
+
+        self.assertEqual(
+            self.cardiology_applicant.approval_status,
+            "rejected"
+        )
+
+    # =====================================================
+    # 5. Regular nurse cannot reject registrations
+    # =====================================================
+
+    def test_regular_nurse_cannot_reject(self):
+        response = self.reject_as(
+            self.nurse,
+            self.emergency_applicant
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        self.assert_still_pending(
+            self.emergency_applicant
+        )
+
+    # =====================================================
+    # 6. is_staff alone does not grant permission
+    # =====================================================
+
+    def test_is_staff_alone_cannot_reject(self):
+        response = self.reject_as(
+            self.staff_user,
+            self.emergency_applicant
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        self.assert_still_pending(
+            self.emergency_applicant
+        )
+
+    # =====================================================
+    # 7. Pending administrator cannot reject
+    # =====================================================
+
+    def test_pending_department_admin_cannot_reject(self):
+        response = self.reject_as(
+            self.pending_admin,
+            self.emergency_applicant
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        self.assert_still_pending(
+            self.emergency_applicant
+        )
+
+    # =====================================================
+    # 8. Administrator cannot reject applicant
+    #    without a requested department
+    # =====================================================
+
+    def test_admin_cannot_reject_without_requested_department(self):
+        self.emergency_applicant.requested_department = None
+
+        self.emergency_applicant.save(
+            update_fields=["requested_department"]
+        )
+
+        response = self.reject_as(
+            self.emergency_admin,
+            self.emergency_applicant
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+
+        self.assert_still_pending(
+            self.emergency_applicant
+        )
+
+    # =====================================================
+    # 9. Only pending registrations can be rejected
+    # =====================================================
+
+    def test_admin_cannot_reject_already_approved_user(self):
+        self.emergency_applicant.approval_status = "approved"
+        self.emergency_applicant.is_active = True
+
+        self.emergency_applicant.save(
+            update_fields=["approval_status", "is_active"]
+        )
+
+        response = self.reject_as(
+            self.emergency_admin,
+            self.emergency_applicant
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_409_CONFLICT
+        )
+
+        self.emergency_applicant.refresh_from_db()
+
+        self.assertEqual(
+            self.emergency_applicant.approval_status,
+            "approved"
+        )
+
+        self.assertTrue(
+            self.emergency_applicant.is_active
+        )
+
+    # =====================================================
+    # 10. Rejection must not create department membership
+    # =====================================================
+
+    def test_rejection_does_not_create_membership(self):
+        response = self.reject_as(
+            self.emergency_admin,
+            self.emergency_applicant
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK
+        )
+
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.emergency_applicant
+            ).exists()
+        )
 
 class ApprovedUserPermissionTests(TestCase):
 
@@ -2659,7 +3396,6 @@ class UpdateProfileTests(APITestCase):
         response = self.client.patch(
             self.url,
             {
-                "email": "hacker@example.com",
                 "approval_status": "rejected",
                 "is_active": False,
                 "is_staff": True,
@@ -2673,14 +3409,7 @@ class UpdateProfileTests(APITestCase):
 
         self.user.refresh_from_db()
 
-        self.assertEqual(
-            self.user.email,
-            "owner@example.com",
-        )
-        self.assertEqual(
-            self.user.approval_status,
-            "approved",
-        )
+        self.assertEqual(self.user.approval_status, "approved")
         self.assertTrue(self.user.is_active)
         self.assertFalse(self.user.is_staff)
         self.assertFalse(self.user.is_superuser)
@@ -2819,6 +3548,82 @@ class UpdateProfileTests(APITestCase):
             "CSRF Protected Update",
         )
 
+    def test_user_can_update_own_email(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            self.url,
+            {
+                "email": "newowner@example.com"
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.user.refresh_from_db()
+
+        self.assertEqual(
+            self.user.email,
+            "newowner@example.com"
+        )
+
+        self.assertEqual(
+            response.data["email"],
+            "newowner@example.com"
+        )
+
+    def test_duplicate_email_is_rejected(self):
+        User = get_user_model()
+
+        User.objects.create_user(
+            email="existing@example.com",
+            name="Existing User",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            self.url,
+            {
+                "email": "existing@example.com"
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("email", response.data)
+
+        self.user.refresh_from_db()
+
+        self.assertEqual(
+            self.user.email,
+            "owner@example.com"
+        )
+
+    def test_invalid_email_is_rejected(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            self.url,
+            {
+                "email": "invalid-email"
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("email", response.data)
+
+        self.user.refresh_from_db()
+
+        self.assertEqual(
+            self.user.email,
+            "owner@example.com"
+        )
 
 class StaffProfileTests(APITestCase):
 
@@ -3277,30 +4082,35 @@ class StaffListTests(APITestCase):
         self.assertNotIn("is_superuser", staff)
         self.assertNotIn("approval_status", staff)
 
+class StaffPersonalInfoProtectionTests(APITestCase):
 
-
-class AdminStaffUpdateTests(APITestCase):
-
-    def setUp(self):
+    @classmethod
+    def setUpTestData(cls):
         User = get_user_model()
 
-        self.admin = User.objects.create_superuser(
-            email="admin@example.com",
-            name="Hospital Admin",
+        cls.superuser = User.objects.create_superuser(
+            email="superuser@example.com",
+            name="System Superuser",
             password="StrongTestPassword123!",
         )
 
-        self.staff = User.objects.create_user(
-            email="staff@example.com",
-            name="Original Staff",
+        cls.department_admin = User.objects.create_user(
+            email="admin@example.com",
+            name="Emergency Administrator",
             password="StrongTestPassword123!",
-            phone_number="+212612345678",
-            show_phone_number=False,
             approval_status="approved",
             is_active=True,
         )
 
-        self.regular_user = User.objects.create_user(
+        cls.staff = User.objects.create_user(
+            email="nurse@example.com",
+            name="Original Nurse",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        cls.regular_user = User.objects.create_user(
             email="regular@example.com",
             name="Regular Staff",
             password="StrongTestPassword123!",
@@ -3308,364 +4118,136 @@ class AdminStaffUpdateTests(APITestCase):
             is_active=True,
         )
 
-        self.inactive_staff = User.objects.create_user(
-            email="inactive@example.com",
-            name="Inactive Staff",
-            password="StrongTestPassword123!",
-            approval_status="approved",
-            is_active=False,
+        cls.department = Department.objects.create(
+            name="Emergency"
         )
 
-        self.url = reverse(
-            "admin-staff-update",
-            kwargs={"user_id": self.staff.id},
+        cls.administrator_role = Role.objects.get(
+            name="Administrator"
         )
 
-    def test_admin_can_update_name_and_email(self):
-        self.client.force_authenticate(user=self.admin)
+        cls.nurse_role = Role.objects.get(
+            name="Nurse"
+        )
+
+        DepartmentMembership.objects.create(
+            user=cls.department_admin,
+            department=cls.department,
+            role=cls.administrator_role,
+        )
+
+        DepartmentMembership.objects.create(
+            user=cls.staff,
+            department=cls.department,
+            role=cls.nurse_role,
+        )
+
+        cls.staff_profile_url = reverse(
+            "staff-profile",
+            kwargs={"user_id": cls.staff.id},
+        )
+
+        cls.me_url = reverse("me")
+
+    def test_superuser_cannot_edit_other_staff_personal_info(self):
+        self.client.force_authenticate(user=self.superuser)
 
         response = self.client.patch(
-            self.url,
+            self.staff_profile_url,
             {
-                "name": "Updated Staff",
-                "email": "updated@example.com",
+                "name": "Changed Name",
+                "email": "changed@example.com",
             },
             format="json",
         )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_405_METHOD_NOT_ALLOWED
+        )
 
         self.staff.refresh_from_db()
 
-        self.assertEqual(self.staff.name, "Updated Staff")
-        self.assertEqual(self.staff.email, "updated@example.com")
-        self.assertEqual(response.data["name"], "Updated Staff")
-        self.assertEqual(response.data["email"], "updated@example.com")
+        self.assertEqual(self.staff.name, "Original Nurse")
+        self.assertEqual(self.staff.email, "nurse@example.com")
 
-    def test_partial_update_preserves_email(self):
-        self.client.force_authenticate(user=self.admin)
+    def test_department_admin_cannot_edit_other_staff_personal_info(self):
+        self.client.force_authenticate(user=self.department_admin)
 
         response = self.client.patch(
-            self.url,
-            {"name": "New Name"},
+            self.staff_profile_url,
+            {
+                "name": "Changed Name",
+                "email": "changed@example.com",
+            },
             format="json",
         )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_405_METHOD_NOT_ALLOWED
+        )
 
         self.staff.refresh_from_db()
 
-        self.assertEqual(self.staff.name, "New Name")
-        self.assertEqual(self.staff.email, "staff@example.com")
+        self.assertEqual(self.staff.name, "Original Nurse")
+        self.assertEqual(self.staff.email, "nurse@example.com")
 
-    def test_admin_can_update_inactive_approved_staff(self):
-        self.client.force_authenticate(user=self.admin)
-
-        url = reverse(
-            "admin-staff-update",
-            kwargs={"user_id": self.inactive_staff.id},
-        )
-
-        response = self.client.patch(
-            url,
-            {"name": "Corrected Name"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        self.inactive_staff.refresh_from_db()
-
-        self.assertEqual(self.inactive_staff.name, "Corrected Name")
-        self.assertFalse(self.inactive_staff.is_active)
-
-    def test_pending_target_returns_404(self):
-        self.staff.approval_status = "pending"
-        self.staff.save(update_fields=["approval_status"])
-
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Changed"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 404)
-
-        self.staff.refresh_from_db()
-        self.assertEqual(self.staff.name, "Original Staff")
-
-    def test_rejected_target_returns_404(self):
-        self.staff.approval_status = "rejected"
-        self.staff.save(update_fields=["approval_status"])
-
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Changed"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 404)
-
-        self.staff.refresh_from_db()
-        self.assertEqual(self.staff.name, "Original Staff")
-
-    def test_nonexistent_target_returns_404(self):
-        self.client.force_authenticate(user=self.admin)
-
-        url = reverse(
-            "admin-staff-update",
-            kwargs={"user_id": 999999},
-        )
-
-        response = self.client.patch(
-            url,
-            {"name": "Changed"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 404)
-
-    def test_regular_user_cannot_update_staff(self):
+    def test_regular_staff_cannot_edit_other_staff_personal_info(self):
         self.client.force_authenticate(user=self.regular_user)
 
         response = self.client.patch(
-            self.url,
-            {"name": "Unauthorized Change"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-
-        self.staff.refresh_from_db()
-        self.assertEqual(self.staff.name, "Original Staff")
-
-    def test_unauthenticated_user_cannot_update_staff(self):
-        response = self.client.patch(
-            self.url,
-            {"name": "Unauthorized Change"},
-            format="json",
-        )
-
-        self.assertIn(response.status_code, [401, 403])
-
-        self.staff.refresh_from_db()
-        self.assertEqual(self.staff.name, "Original Staff")
-
-    def test_pending_admin_cannot_update_staff(self):
-        self.admin.approval_status = "pending"
-        self.admin.save(update_fields=["approval_status"])
-
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Unauthorized Change"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-
-        self.staff.refresh_from_db()
-        self.assertEqual(self.staff.name, "Original Staff")
-
-    def test_rejected_admin_cannot_update_staff(self):
-        self.admin.approval_status = "rejected"
-        self.admin.save(update_fields=["approval_status"])
-
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Unauthorized Change"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-
-        self.staff.refresh_from_db()
-        self.assertEqual(self.staff.name, "Original Staff")
-
-    def test_inactive_admin_cannot_update_staff(self):
-        self.admin.is_active = False
-        self.admin.save(update_fields=["is_active"])
-
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": "Unauthorized Change"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 403)
-
-        self.staff.refresh_from_db()
-        self.assertEqual(self.staff.name, "Original Staff")
-
-    def test_duplicate_email_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"email": "regular@example.com"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("email", response.data)
-
-        self.staff.refresh_from_db()
-        self.assertEqual(self.staff.email, "staff@example.com")
-
-    def test_invalid_email_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"email": "invalid-email"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("email", response.data)
-
-        self.staff.refresh_from_db()
-        self.assertEqual(self.staff.email, "staff@example.com")
-
-    def test_empty_name_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"name": ""},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("name", response.data)
-
-        self.staff.refresh_from_db()
-        self.assertEqual(self.staff.name, "Original Staff")
-
-    def test_empty_email_is_rejected(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
-            {"email": ""},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("email", response.data)
-
-        self.staff.refresh_from_db()
-        self.assertEqual(self.staff.email, "staff@example.com")
-
-    def test_admin_cannot_modify_protected_fields(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.patch(
-            self.url,
+            self.staff_profile_url,
             {
-                "name": "Updated Name",
-                "is_superuser": True,
-                "is_staff": True,
-                "is_active": False,
-                "approval_status": "rejected",
-                "phone_number": "+212699999999",
-                "show_phone_number": True,
-                "status": "online",
-                "password": "HackedPassword123!",
+                "name": "Changed Name",
+                "email": "changed@example.com",
             },
             format="json",
         )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_405_METHOD_NOT_ALLOWED
+        )
 
         self.staff.refresh_from_db()
 
-        self.assertEqual(self.staff.name, "Updated Name")
-        self.assertFalse(self.staff.is_superuser)
-        self.assertFalse(self.staff.is_staff)
-        self.assertTrue(self.staff.is_active)
-        self.assertEqual(self.staff.approval_status, "approved")
-        self.assertEqual(self.staff.phone_number, "+212612345678")
-        self.assertFalse(self.staff.show_phone_number)
-        self.assertEqual(self.staff.status, "offline")
-        self.assertTrue(
-            self.staff.check_password("StrongTestPassword123!")
-        )
+        self.assertEqual(self.staff.name, "Original Nurse")
+        self.assertEqual(self.staff.email, "nurse@example.com")
 
-    def test_response_contains_only_allowed_fields(self):
-        self.client.force_authenticate(user=self.admin)
+    def test_department_admin_can_update_own_personal_info(self):
+        self.client.force_authenticate(user=self.department_admin)
 
         response = self.client.patch(
-            self.url,
-            {"name": "Updated Name"},
+            self.me_url,
+            {
+                "name": "Sara Updated",
+                "email": "sara.updated@example.com",
+            },
             format="json",
         )
 
-        self.assertEqual(response.status_code, 200)
         self.assertEqual(
-            set(response.data.keys()),
-            {"name", "email"},
+            response.status_code,
+            status.HTTP_200_OK
         )
 
-    def test_post_method_is_not_allowed(self):
-        self.client.force_authenticate(user=self.admin)
+        self.department_admin.refresh_from_db()
 
-        response = self.client.post(
-            self.url,
-            {"name": "Changed"},
-            format="json",
+        self.assertEqual(
+            self.department_admin.name,
+            "Sara Updated"
         )
 
-        self.assertEqual(response.status_code, 405)
-
-    def test_patch_without_csrf_token_is_rejected(self):
-        client = APIClient(enforce_csrf_checks=True)
-        client.force_login(self.admin)
-
-        response = client.patch(
-            self.url,
-            {"name": "Unauthorized Change"},
-            format="json",
+        self.assertEqual(
+            self.department_admin.email,
+            "sara.updated@example.com"
         )
-
-        self.assertEqual(response.status_code, 403)
 
         self.staff.refresh_from_db()
-        self.assertEqual(self.staff.name, "Original Staff")
 
-    def test_patch_with_valid_csrf_token_succeeds(self):
-        client = APIClient(enforce_csrf_checks=True)
-        client.force_login(self.admin)
-
-        client.get("/api/auth/csrf/")
-
-        self.assertIn("csrftoken", client.cookies)
-
-        csrf_token = client.cookies["csrftoken"].value
-
-        response = client.patch(
-            self.url,
-            {"name": "CSRF Protected Update"},
-            format="json",
-            HTTP_X_CSRFTOKEN=csrf_token,
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        self.staff.refresh_from_db()
-        self.assertEqual(
-            self.staff.name,
-            "CSRF Protected Update",
-        )
+        self.assertEqual(self.staff.name, "Original Nurse")
+        self.assertEqual(self.staff.email, "nurse@example.com")
 
 
 class DeactivateStaffTests(APITestCase):
@@ -4510,8 +5092,6 @@ class DepartmentRoleMembershipModelTests(TestCase):
             ).exists()
         )
 
-
-
 class DepartmentListCreateTests(APITestCase):
 
     def setUp(self):
@@ -4526,6 +5106,22 @@ class DepartmentListCreateTests(APITestCase):
         self.staff = User.objects.create_user(
             email="staff@example.com",
             name="Approved Staff",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.department_admin = User.objects.create_user(
+            email="department.admin@example.com",
+            name="Emergency Administrator",
+            password="StrongTestPassword123!",
+            approval_status="approved",
+            is_active=True,
+        )
+
+        self.cardiology_admin = User.objects.create_user(
+            email="cardiology.admin@example.com",
+            name="Cardiology Administrator",
             password="StrongTestPassword123!",
             approval_status="approved",
             is_active=True,
@@ -4565,187 +5161,197 @@ class DepartmentListCreateTests(APITestCase):
             description="Heart-related medical services",
         )
 
+        self.administrator_role = Role.objects.get(name="Administrator")
+        self.administrator_membership = DepartmentMembership.objects.create(
+            user=self.department_admin,
+            department=self.emergency,
+            role=self.administrator_role,
+        )
+
+        DepartmentMembership.objects.create(
+            user=self.cardiology_admin,
+            department=self.cardiology,
+            role=self.administrator_role,
+        )
+
         self.url = reverse("department-list-create")
 
-    # =====================================================
-    # GET: Public department listing
-    # =====================================================
+    def valid_payload(self, name="Neurology"):
+        return {
+            "name": name,
+            "description": "Nervous system care",
+            "administrator": self.staff.id,
+        }
+
+    # Public department listing
 
     def test_approved_staff_can_list_departments(self):
         self.client.force_authenticate(user=self.staff)
-
         response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 2)
-
-        self.assertEqual(
-            response.data[0]["id"],
-            self.emergency.id,
-        )
-
-        self.assertEqual(
-            response.data[1]["id"],
-            self.cardiology.id,
-        )
-
-        self.assertEqual(
-            response.data[0]["name"],
-            "Emergency",
-        )
+        self.assertEqual(response.data[0]["id"], self.emergency.id)
+        self.assertEqual(response.data[1]["id"], self.cardiology.id)
+        self.assertEqual(response.data[0]["name"], "Emergency")
 
     def test_admin_can_list_departments(self):
         self.client.force_authenticate(user=self.admin)
-
         response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 2)
-
         self.assertEqual(
             set(response.data[0].keys()),
-            {"id", "name", "description"},
+            {"id", "name", "description", "is_active"},
         )
+        self.assertTrue(response.data[0]["is_active"])
 
     def test_unauthenticated_user_can_list_departments(self):
         response = self.client.get(self.url)
-
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 2)
 
     def test_pending_user_can_list_departments(self):
         self.client.force_authenticate(user=self.pending_user)
-
         response = self.client.get(self.url)
-
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 2)
 
     def test_rejected_user_can_list_departments(self):
         self.client.force_authenticate(user=self.rejected_user)
-
         response = self.client.get(self.url)
-
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 2)
 
     def test_inactive_user_can_list_departments(self):
         self.client.force_authenticate(user=self.inactive_user)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 2)
+
+    def test_inactive_department_still_appears_in_listing(self):
+        self.cardiology.is_active = False
+        self.cardiology.save(update_fields=["is_active"])
 
         response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 2)
+        self.assertFalse(response.data[1]["is_active"])
 
-    # =====================================================
-    # POST: Successful department creation
-    # =====================================================
+    # Successful department creation
 
     def test_admin_can_create_department(self):
         self.client.force_authenticate(user=self.admin)
-
         response = self.client.post(
             self.url,
             {
                 "name": "Pediatrics",
                 "description": "Healthcare for children",
+                "administrator": self.staff.id,
             },
             format="json",
         )
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["name"], "Pediatrics")
-
-        self.assertEqual(
-            response.data["description"],
-            "Healthcare for children",
-        )
-
+        self.assertEqual(response.data["description"], "Healthcare for children")
+        self.assertTrue(response.data["is_active"])
         self.assertIn("id", response.data)
-
-        self.assertTrue(
-            Department.objects.filter(
-                name="Pediatrics"
-            ).exists()
-        )
-
+        self.assertNotIn("administrator", response.data)
         self.assertEqual(Department.objects.count(), 3)
 
-    def test_admin_can_create_department_without_description(self):
-        self.client.force_authenticate(user=self.admin)
+        department = Department.objects.get(name="Pediatrics")
+        self.assertTrue(department.is_active)
+        self.assertTrue(
+            DepartmentMembership.objects.filter(
+                user=self.staff,
+                department=department,
+                role=self.administrator_role,
+            ).exists()
+        )
+        self.assertEqual(
+            DepartmentMembership.objects.filter(
+                department=department,
+                role=self.administrator_role,
+            ).count(),
+            1,
+        )
+
+    def test_department_admin_can_create_department(self):
+        self.assertFalse(self.department_admin.is_staff)
+        self.assertFalse(self.department_admin.is_superuser)
+        self.client.force_authenticate(user=self.department_admin)
 
         response = self.client.post(
             self.url,
-            {"name": "Neurology"},
+            self.valid_payload(),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        department = Department.objects.get(name="Neurology")
+        self.assertTrue(
+            DepartmentMembership.objects.filter(
+                user=self.staff,
+                department=department,
+                role=self.administrator_role,
+            ).exists()
+        )
+
+    def test_admin_can_create_department_without_description(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(
+            self.url,
+            {"name": "Neurology", "administrator": self.staff.id},
             format="json",
         )
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["name"], "Neurology")
         self.assertEqual(response.data["description"], "")
-
-        self.assertTrue(
-            Department.objects.filter(
-                name="Neurology"
-            ).exists()
-        )
+        self.assertTrue(Department.objects.filter(name="Neurology").exists())
 
     def test_department_id_is_read_only(self):
         self.client.force_authenticate(user=self.admin)
+        payload = self.valid_payload("Surgery")
+        payload["id"] = 999999
 
-        response = self.client.post(
-            self.url,
-            {
-                "id": 999999,
-                "name": "Surgery",
-                "description": "Surgical services",
-            },
-            format="json",
-        )
+        response = self.client.post(self.url, payload, format="json")
 
         self.assertEqual(response.status_code, 201)
+        self.assertNotEqual(response.data["id"], 999999)
+        self.assertEqual(response.data["name"], "Surgery")
 
-        self.assertNotEqual(
-            response.data["id"],
-            999999,
-        )
+    def test_department_is_active_is_read_only_on_creation(self):
+        self.client.force_authenticate(user=self.admin)
+        payload = self.valid_payload()
+        payload["is_active"] = False
 
-        self.assertEqual(
-            response.data["name"],
-            "Surgery",
-        )
+        response = self.client.post(self.url, payload, format="json")
 
-    # =====================================================
-    # POST: Permissions
-    # =====================================================
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(response.data["is_active"])
+        self.assertTrue(Department.objects.get(name="Neurology").is_active)
+
+    # Permissions
 
     def test_regular_staff_cannot_create_department(self):
         self.client.force_authenticate(user=self.staff)
-
         response = self.client.post(
-            self.url,
-            {"name": "Neurology"},
-            format="json",
+            self.url, self.valid_payload(), format="json"
         )
 
         self.assertEqual(response.status_code, 403)
-
         self.assertEqual(
-            response.data["message"],
-            "Administrator access required.",
+            response.data["message"], "Administrator access required."
         )
-
-        self.assertFalse(
-            Department.objects.filter(
-                name="Neurology"
-            ).exists()
-        )
+        self.assertFalse(Department.objects.filter(name="Neurology").exists())
 
     def test_unauthenticated_user_cannot_create_department(self):
         response = self.client.post(
-            self.url,
-            {"name": "Neurology"},
-            format="json",
+            self.url, self.valid_payload(), format="json"
         )
 
         self.assertIn(response.status_code, [401, 403])
@@ -4754,13 +5360,10 @@ class DepartmentListCreateTests(APITestCase):
     def test_pending_admin_cannot_create_department(self):
         self.admin.approval_status = "pending"
         self.admin.save(update_fields=["approval_status"])
-
         self.client.force_authenticate(user=self.admin)
 
         response = self.client.post(
-            self.url,
-            {"name": "Neurology"},
-            format="json",
+            self.url, self.valid_payload(), format="json"
         )
 
         self.assertEqual(response.status_code, 403)
@@ -4769,13 +5372,10 @@ class DepartmentListCreateTests(APITestCase):
     def test_rejected_admin_cannot_create_department(self):
         self.admin.approval_status = "rejected"
         self.admin.save(update_fields=["approval_status"])
-
         self.client.force_authenticate(user=self.admin)
 
         response = self.client.post(
-            self.url,
-            {"name": "Neurology"},
-            format="json",
+            self.url, self.valid_payload(), format="json"
         )
 
         self.assertEqual(response.status_code, 403)
@@ -4784,33 +5384,88 @@ class DepartmentListCreateTests(APITestCase):
     def test_inactive_admin_cannot_create_department(self):
         self.admin.is_active = False
         self.admin.save(update_fields=["is_active"])
-
         self.client.force_authenticate(user=self.admin)
 
         response = self.client.post(
-            self.url,
-            {"name": "Neurology"},
-            format="json",
+            self.url, self.valid_payload(), format="json"
         )
 
         self.assertEqual(response.status_code, 403)
         self.assertEqual(Department.objects.count(), 2)
 
-    # =====================================================
-    # POST: Validation
-    # =====================================================
+    def test_admin_with_only_inactive_department_cannot_create_department(self):
+        self.emergency.is_active = False
+        self.emergency.save(update_fields=["is_active"])
+        self.client.force_authenticate(user=self.department_admin)
+
+        response = self.client.post(
+            self.url, self.valid_payload(), format="json"
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(Department.objects.count(), 2)
+
+    # Validation
+
+    def test_missing_administrator_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(
+            self.url, {"name": "Neurology"}, format="json"
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("administrator", response.data)
+        self.assertEqual(Department.objects.count(), 2)
+
+    def test_inactive_administrator_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+        payload = self.valid_payload()
+        payload["administrator"] = self.inactive_user.id
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("administrator", response.data)
+        self.assertEqual(Department.objects.count(), 2)
+
+    def test_pending_administrator_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+        payload = self.valid_payload()
+        payload["administrator"] = self.pending_user.id
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("administrator", response.data)
+        self.assertEqual(Department.objects.count(), 2)
+
+    def test_rejected_administrator_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+        payload = self.valid_payload()
+        payload["administrator"] = self.rejected_user.id
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("administrator", response.data)
+        self.assertEqual(Department.objects.count(), 2)
+
+    def test_nonexistent_administrator_is_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+        payload = self.valid_payload()
+        payload["administrator"] = 999999
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("administrator", response.data)
+        self.assertEqual(Department.objects.count(), 2)
 
     def test_duplicate_department_name_is_rejected(self):
         self.client.force_authenticate(user=self.admin)
+        payload = self.valid_payload("Emergency")
 
-        response = self.client.post(
-            self.url,
-            {
-                "name": "Emergency",
-                "description": "Another department",
-            },
-            format="json",
-        )
+        response = self.client.post(self.url, payload, format="json")
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("name", response.data)
@@ -4818,10 +5473,9 @@ class DepartmentListCreateTests(APITestCase):
 
     def test_missing_department_name_is_rejected(self):
         self.client.force_authenticate(user=self.admin)
-
         response = self.client.post(
             self.url,
-            {"description": "No department name"},
+            {"description": "No name", "administrator": self.staff.id},
             format="json",
         )
 
@@ -4831,15 +5485,10 @@ class DepartmentListCreateTests(APITestCase):
 
     def test_empty_department_name_is_rejected(self):
         self.client.force_authenticate(user=self.admin)
+        payload = self.valid_payload()
+        payload["name"] = ""
 
-        response = self.client.post(
-            self.url,
-            {
-                "name": "",
-                "description": "Invalid department",
-            },
-            format="json",
-        )
+        response = self.client.post(self.url, payload, format="json")
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("name", response.data)
@@ -4847,83 +5496,55 @@ class DepartmentListCreateTests(APITestCase):
 
     def test_department_name_exceeding_max_length_is_rejected(self):
         self.client.force_authenticate(user=self.admin)
+        payload = self.valid_payload()
+        payload["name"] = "A" * 101
 
-        response = self.client.post(
-            self.url,
-            {"name": "A" * 101},
-            format="json",
-        )
+        response = self.client.post(self.url, payload, format="json")
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("name", response.data)
         self.assertEqual(Department.objects.count(), 2)
 
-    # =====================================================
-    # POST: CSRF protection
-    # =====================================================
+    # CSRF
 
     def test_post_without_csrf_token_is_rejected(self):
         client = APIClient(enforce_csrf_checks=True)
         client.force_login(self.admin)
 
         response = client.post(
-            self.url,
-            {"name": "Neurology"},
-            format="json",
+            self.url, self.valid_payload(), format="json"
         )
 
         self.assertEqual(response.status_code, 403)
-
-        self.assertFalse(
-            Department.objects.filter(
-                name="Neurology"
-            ).exists()
-        )
+        self.assertFalse(Department.objects.filter(name="Neurology").exists())
 
     def test_post_with_valid_csrf_token_succeeds(self):
         client = APIClient(enforce_csrf_checks=True)
         client.force_login(self.admin)
-
         client.get(reverse("csrf"))
-
         self.assertIn("csrftoken", client.cookies)
 
         csrf_token = client.cookies["csrftoken"].value
-
         response = client.post(
             self.url,
-            {
-                "name": "Neurology",
-                "description": "Nervous system care",
-            },
+            self.valid_payload(),
             format="json",
             HTTP_X_CSRFTOKEN=csrf_token,
         )
 
         self.assertEqual(response.status_code, 201)
+        self.assertTrue(Department.objects.filter(name="Neurology").exists())
 
-        self.assertTrue(
-            Department.objects.filter(
-                name="Neurology"
-            ).exists()
-        )
-
-    # =====================================================
     # Unsupported HTTP methods
-    # =====================================================
 
     def test_patch_method_is_not_allowed(self):
         self.client.force_authenticate(user=self.admin)
-
         response = self.client.patch(
-            self.url,
-            {"name": "Changed"},
-            format="json",
+            self.url, {"name": "Changed"}, format="json"
         )
 
         self.assertEqual(response.status_code, 405)
         self.assertEqual(Department.objects.count(), 2)
-
 
 class DepartmentDeleteTests(APITestCase):
 
