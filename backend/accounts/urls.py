@@ -4,6 +4,7 @@ from .views import PendingRegistrationsView, ApproveRegistrationView, RejectRegi
 from .views import StaffListView, DeactivateStaffView, ActivateStaffView, DepartmentListCreateView
 from .views import DepartmentDetailView, DepartmentMembershipListCreateView, DepartmentMembershipDetailView, RoleListCreateView
 from .views import TransferDepartmentAdministratorView, DeactivateDepartmentView, ActivateDepartmentView
+from .views import UpdateDepartmentTaskAcceptanceView
 
 urlpatterns = [
     path("login/", LoginView.as_view(), name="login"),
@@ -35,8 +36,10 @@ urlpatterns = [
     path("memberships/", DepartmentMembershipListCreateView.as_view(), name="membership-list-create"),
     path("memberships/<int:membership_id>/", DepartmentMembershipDetailView.as_view(), name="membership-detail"),
     path("roles/", RoleListCreateView.as_view(), name="role-list-create"),
-    path("departments/<int:department_id>/transfer-administrator/", TransferDepartmentAdministratorView.as_view(),
-    name="transfer-department-administrator"),
+    path("departments/<int:department_id>/transfer-administrator/",
+        TransferDepartmentAdministratorView.as_view(),
+        name="transfer-department-administrator"
+    ),
     path(
         "departments/<int:department_id>/deactivate/",
         DeactivateDepartmentView.as_view(),
@@ -47,5 +50,9 @@ urlpatterns = [
         "departments/<int:department_id>/activate/",
         ActivateDepartmentView.as_view(),
         name="department-activate"
+    ),
+    path("departments/<int:department_id>/task-acceptance/",
+        UpdateDepartmentTaskAcceptanceView.as_view(),
+        name="department-task-acceptance"
     ),
 ]

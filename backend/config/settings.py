@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'accounts.apps.AccountsConfig',
+    "audit.apps.AuditConfig",
 ]
 
 MIDDLEWARE = [

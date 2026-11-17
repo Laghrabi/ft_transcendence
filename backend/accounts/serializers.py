@@ -204,11 +204,13 @@ class DepartmentSerializer(serializers.ModelSerializer):
             "name",
             "description",
             "is_active",
+            "accepts_new_tasks",
         ]
 
         read_only_fields = [
             "id",
             "is_active",
+            "accepts_new_tasks",
         ]
 
 class DepartmentCreateSerializer(serializers.ModelSerializer):
@@ -226,9 +228,10 @@ class DepartmentCreateSerializer(serializers.ModelSerializer):
             "name",
             "description",
             "is_active",
+            "accepts_new_tasks",
             "administrator",
         ]
-        read_only_fields = ["id", "is_active",]
+        read_only_fields = ["id", "is_active", "accepts_new_tasks",]
 
     def validate_administrator(self, value):
 

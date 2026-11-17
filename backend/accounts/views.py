@@ -15,6 +15,7 @@ from .permissions import IsApprovedUser, can_manage_department
 from .serializers import StaffListSerializer, AdminStaffListSerializer, DepartmentSerializer, DepartmentCreateSerializer
 from .serializers import DepartmentMembershipSerializer, RoleSerializer, TransferDepartmentAdministratorSerializer
 from django.db import transaction
+from audit.services import record_audit_event
 
 @method_decorator(csrf_protect, name="dispatch")
 class LoginView(APIView):
@@ -195,14 +196,16 @@ class PendingRegistrationsView(APIView):
 @method_decorator(csrf_protect, name="dispatch")
 class ApproveRegistrationView(APIView):
     """
-    Approve a pending registration and create its department membership.
+    Approve pending registrations and create department memberships.
 
-    Department administrators can approve registrations only for
-    active departments they manage.
+    Department Administrators can approve registrations only
+    for departments they manage.
 
-    Superusers can approve registrations across active departments.
+    Superusers can approve registrations across departments.
 
-    Only Nurse and Doctor roles can be approved through registration.
+    Registrations cannot be approved for inactive departments.
+
+    Successful approvals are recorded in the audit trail.
     """
 
     permission_classes = [IsApprovedUser]
@@ -288,12 +291,12 @@ class ApproveRegistrationView(APIView):
                     status=status.HTTP_409_CONFLICT
                 )
 
-            if user.requested_role.name not in ("Nurse", "Doctor"):
+            if user.requested_role.name == "Administrator":
                 return Response(
                     data={
                         "message": (
-                            "Only Nurse and Doctor roles can be "
-                            "assigned through registration approval."
+                            "Administrator roles cannot be assigned "
+                            "through registration approval."
                         )
                     },
                     status=status.HTTP_403_FORBIDDEN
@@ -309,7 +312,10 @@ class ApproveRegistrationView(APIView):
                     status=status.HTTP_409_CONFLICT
                 )
 
-            DepartmentMembership.objects.create(
+            previous_approval_status = user.approval_status
+            previous_is_active = user.is_active
+
+            membership = DepartmentMembership.objects.create(
                 user=user,
                 department=department,
                 role_id=user.requested_role_id
@@ -322,6 +328,21 @@ class ApproveRegistrationView(APIView):
                 update_fields=["approval_status", "is_active"]
             )
 
+            record_audit_event(
+                actor=request.user,
+                action="registration.approved",
+                target=user,
+                metadata={
+                    "previous_approval_status": previous_approval_status,
+                    "new_approval_status": "approved",
+                    "previous_is_active": previous_is_active,
+                    "new_is_active": True,
+                    "department_id": department.id,
+                    "role_id": user.requested_role_id,
+                    "membership_id": membership.id,
+                }
+            )
+
         return Response(
             data={
                 "message": "Registration approved successfully."
@@ -332,12 +353,14 @@ class ApproveRegistrationView(APIView):
 @method_decorator(csrf_protect, name="dispatch")
 class RejectRegistrationView(APIView):
     """
-    Reject a pending registration.
+    Reject pending registration requests.
 
-    Department administrators can reject registrations only
+    Superusers can reject registrations across departments.
+
+    Department Administrators can reject registrations only
     for active departments they manage.
 
-    Superusers can reject pending registrations across departments.
+    Successful rejections are recorded in the audit trail.
     """
 
     permission_classes = [IsApprovedUser]
@@ -393,11 +416,28 @@ class RejectRegistrationView(APIView):
                     status=status.HTTP_409_CONFLICT
                 )
 
+            previous_approval_status = user.approval_status
+            previous_is_active = user.is_active
+
             user.approval_status = "rejected"
             user.is_active = False
 
             user.save(
                 update_fields=["approval_status", "is_active"]
+            )
+
+            record_audit_event(
+                actor=request.user,
+                action="registration.rejected",
+                target=user,
+                metadata={
+                    "previous_approval_status": previous_approval_status,
+                    "new_approval_status": "rejected",
+                    "previous_is_active": previous_is_active,
+                    "new_is_active": False,
+                    "requested_department_id": user.requested_department_id,
+                    "requested_role_id": user.requested_role_id,
+                }
             )
 
         return Response(
@@ -466,10 +506,10 @@ class DeactivateStaffView(APIView):
     """
     Allow superusers to deactivate approved staff accounts.
 
-    A staff member cannot be deactivated while they are
-    an Administrator of any department.
+    Prevents self-deactivation and deactivation of users
+    who are currently Department Administrators.
 
-    Administrative responsibilities must be transferred first.
+    Records successful deactivations in the audit trail.
     """
 
     permission_classes = [IsApprovedUser]
@@ -479,7 +519,7 @@ class DeactivateStaffView(APIView):
         if not request.user.is_superuser:
             return Response(
                 data={
-                    "message": "Superuser access required."
+                    "message": "Administrator access required."
                 },
                 status=status.HTTP_403_FORBIDDEN
             )
@@ -519,9 +559,8 @@ class DeactivateStaffView(APIView):
                 return Response(
                     data={
                         "message": (
-                            "Cannot deactivate this staff member. "
-                            "Transfer their department Administrator "
-                            "responsibilities first."
+                            "Cannot deactivate a Department Administrator. "
+                            "Transfer administration first."
                         )
                     },
                     status=status.HTTP_409_CONFLICT
@@ -531,6 +570,16 @@ class DeactivateStaffView(APIView):
 
             user.save(
                 update_fields=["is_active"]
+            )
+
+            record_audit_event(
+                actor=request.user,
+                action="staff.deactivated",
+                target=user,
+                metadata={
+                    "previous_is_active": True,
+                    "new_is_active": False,
+                }
             )
 
         return Response(
@@ -543,9 +592,11 @@ class DeactivateStaffView(APIView):
 @method_decorator(csrf_protect, name="dispatch")
 class ActivateStaffView(APIView):
     """
-    Allow superusers to reactivate approved staff accounts.
+    Allow superusers to activate approved staff accounts.
 
-    Only approved accounts can be reactivated.
+    Prevents activating accounts that are already active.
+
+    Records successful activations in the audit trail.
     """
 
     permission_classes = [IsApprovedUser]
@@ -555,7 +606,7 @@ class ActivateStaffView(APIView):
         if not request.user.is_superuser:
             return Response(
                 data={
-                    "message": "Superuser access required."
+                    "message": "Administrator access required."
                 },
                 status=status.HTTP_403_FORBIDDEN
             )
@@ -580,6 +631,16 @@ class ActivateStaffView(APIView):
 
             user.save(
                 update_fields=["is_active"]
+            )
+
+            record_audit_event(
+                actor=request.user,
+                action="staff.activated",
+                target=user,
+                metadata={
+                    "previous_is_active": False,
+                    "new_is_active": True,
+                }
             )
 
         return Response(
@@ -646,7 +707,32 @@ class DepartmentListCreateView(APIView):
         )
 
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+
+        administrator = serializer.validated_data["administrator"]
+
+        with transaction.atomic():
+
+            department = serializer.save()
+
+            administrator_membership = DepartmentMembership.objects.get(
+                user=administrator,
+                department=department,
+                role__name="Administrator"
+            )
+
+            record_audit_event(
+                actor=request.user,
+                action="department.created",
+                target=department,
+                metadata={
+                    "administrator_id": administrator.id,
+                    "administrator_membership_id": (
+                        administrator_membership.id
+                    ),
+                    "is_active": department.is_active,
+                    "accepts_new_tasks": department.accepts_new_tasks,
+                }
+            )
 
         return Response(
             serializer.data,
@@ -656,11 +742,13 @@ class DepartmentListCreateView(APIView):
 @method_decorator(csrf_protect, name="dispatch")
 class DepartmentDetailView(APIView):
     """
-    Manage updates of existing departments.
+    Manage updates to existing departments.
 
-    Access is restricted to approved administrators.
-    Supports partial updates and prevents deletion of departments
-    that have assigned staff members.
+    Only system superusers can update department information.
+
+    Inactive departments cannot be modified.
+
+    Successful changes are recorded in the audit trail.
     """
 
     permission_classes = [IsApprovedUser]
@@ -668,14 +756,13 @@ class DepartmentDetailView(APIView):
     def patch(self, request, department_id):
         """
         Update an active department's name or description.
-
-        Only system superusers can update department information.
-        Inactive departments cannot be modified.
         """
 
         if not request.user.is_superuser:
             return Response(
-                data={"message": "Administrator access required."},
+                data={
+                    "message": "Administrator access required."
+                },
                 status=status.HTTP_403_FORBIDDEN
             )
 
@@ -701,7 +788,43 @@ class DepartmentDetailView(APIView):
             )
 
             serializer.is_valid(raise_exception=True)
-            serializer.save()
+
+            changes = {}
+
+            new_name = serializer.validated_data.get(
+                "name",
+                department.name
+            )
+
+            if new_name != department.name:
+                changes["name"] = {
+                    "old": department.name,
+                    "new": new_name,
+                }
+
+            new_description = serializer.validated_data.get(
+                "description",
+                department.description
+            )
+
+            if new_description != department.description:
+                changes["description"] = {
+                    "old": department.description,
+                    "new": new_description,
+                }
+
+            if changes:
+
+                serializer.save()
+
+                record_audit_event(
+                    actor=request.user,
+                    action="department.updated",
+                    target=department,
+                    metadata={
+                        "changes": changes,
+                    }
+                )
 
         return Response(
             serializer.data,
@@ -872,7 +995,18 @@ class DepartmentMembershipListCreateView(APIView):
             serializer.validated_data["user"] = user
             serializer.validated_data["department"] = department
 
-            serializer.save()
+            membership = serializer.save()
+
+            record_audit_event(
+                actor=request.user,
+                action="department.membership.created",
+                target=membership,
+                metadata={
+                    "user_id": membership.user_id,
+                    "department_id": membership.department_id,
+                    "role_id": membership.role_id,
+                }
+            )
 
         return Response(
             serializer.data,
@@ -912,7 +1046,10 @@ class DepartmentMembershipDetailView(APIView):
                     status=status.HTTP_403_FORBIDDEN
                 )
 
-        if set(request.data.keys()) != {"role"}:
+        if (
+            not isinstance(request.data, dict)
+            or set(request.data.keys()) != {"role"}
+        ):
             return Response(
                 data={
                     "message": "Only the role field can be updated."
@@ -1024,7 +1161,23 @@ class DepartmentMembershipDetailView(APIView):
                         status=status.HTTP_409_CONFLICT
                     )
 
-            serializer.save()
+            if current_role.id != new_role.id:
+
+                serializer.save()
+
+                record_audit_event(
+                    actor=request.user,
+                    action="department.membership.role_updated",
+                    target=membership,
+                    metadata={
+                        "user_id": membership.user_id,
+                        "department_id": membership.department_id,
+                        "previous_role_id": current_role.id,
+                        "previous_role_name": current_role.name,
+                        "new_role_id": new_role.id,
+                        "new_role_name": new_role.name,
+                    }
+                )
 
         return Response(
             serializer.data,
@@ -1116,6 +1269,18 @@ class DepartmentMembershipDetailView(APIView):
                         status=status.HTTP_409_CONFLICT
                     )
 
+            record_audit_event(
+                actor=request.user,
+                action="department.membership.deleted",
+                target=membership,
+                metadata={
+                    "user_id": membership.user_id,
+                    "department_id": membership.department_id,
+                    "role_id": membership.role_id,
+                    "role_name": membership.role.name,
+                }
+            )
+
             membership.delete()
 
         return Response(
@@ -1143,11 +1308,13 @@ class TransferDepartmentAdministratorView(APIView):
     """
     Transfer department administration to another staff member.
 
-    Only the superuser or the current department Administrator
+    Only the superuser or the current Department Administrator
     can perform this operation.
 
-    The previous Administrator's department membership is deleted,
+    The previous Administrator's membership is deleted,
     but their user account is preserved.
+
+    Successful transfers are recorded in the audit trail.
     """
 
     permission_classes = [IsApprovedUser]
@@ -1260,12 +1427,17 @@ class TransferDepartmentAdministratorView(APIView):
             )
 
             previous_administrator_id = current_membership.user_id
+            previous_membership_id = current_membership.id
+
+            new_administrator_was_member = (
+                new_membership is not None
+            )
 
             current_membership.delete()
 
             if new_membership is None:
 
-                DepartmentMembership.objects.create(
+                new_membership = DepartmentMembership.objects.create(
                     user=new_administrator,
                     department=department,
                     role=administrator_role
@@ -1278,6 +1450,21 @@ class TransferDepartmentAdministratorView(APIView):
                 new_membership.save(
                     update_fields=["role"]
                 )
+
+            record_audit_event(
+                actor=request.user,
+                action="department.administrator.transferred",
+                target=department,
+                metadata={
+                    "previous_administrator_id": previous_administrator_id,
+                    "new_administrator_id": new_administrator.id,
+                    "previous_membership_id": previous_membership_id,
+                    "new_membership_id": new_membership.id,
+                    "new_administrator_was_member": (
+                        new_administrator_was_member
+                    ),
+                }
+            )
 
         return Response(
             data={
@@ -1293,6 +1480,12 @@ class TransferDepartmentAdministratorView(APIView):
 
 @method_decorator(csrf_protect, name="dispatch")
 class DeactivateDepartmentView(APIView):
+    """
+    Allow superusers to deactivate departments.
+
+    Records successful department deactivations
+    in the audit trail.
+    """
 
     permission_classes = [IsApprovedUser]
 
@@ -1327,6 +1520,16 @@ class DeactivateDepartmentView(APIView):
                 update_fields=["is_active"]
             )
 
+            record_audit_event(
+                actor=request.user,
+                action="department.deactivated",
+                target=department,
+                metadata={
+                    "previous_is_active": True,
+                    "new_is_active": False,
+                }
+            )
+
         return Response(
             data={
                 "message": "Department deactivated successfully."
@@ -1336,6 +1539,12 @@ class DeactivateDepartmentView(APIView):
 
 @method_decorator(csrf_protect, name="dispatch")
 class ActivateDepartmentView(APIView):
+    """
+    Allow superusers to reactivate departments.
+
+    Records successful department reactivations
+    in the audit trail.
+    """
 
     permission_classes = [IsApprovedUser]
 
@@ -1370,10 +1579,129 @@ class ActivateDepartmentView(APIView):
                 update_fields=["is_active"]
             )
 
+            record_audit_event(
+                actor=request.user,
+                action="department.activated",
+                target=department,
+                metadata={
+                    "previous_is_active": False,
+                    "new_is_active": True,
+                }
+            )
+
         return Response(
             data={
                 "message": "Department activated successfully."
             },
+            status=status.HTTP_200_OK
+        )
+
+@method_decorator(csrf_protect, name="dispatch")
+class UpdateDepartmentTaskAcceptanceView(APIView):
+    """
+    Pause or resume new task assignments for a department.
+
+    Superusers can manage any department.
+
+    Department Administrators can manage only their own department.
+
+    Inactive departments cannot accept new task assignments.
+
+    Successful changes are recorded in the audit trail.
+    """
+
+    permission_classes = [IsApprovedUser]
+
+    def patch(self, request, department_id):
+
+        if (
+            not isinstance(request.data, dict)
+            or set(request.data.keys()) != {"accepts_new_tasks"}
+        ):
+            return Response(
+                data={
+                    "message": (
+                        "Only the accepts_new_tasks field can be updated."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        accepts_new_tasks = request.data["accepts_new_tasks"]
+
+        if not isinstance(accepts_new_tasks, bool):
+            return Response(
+                data={
+                    "accepts_new_tasks": [
+                        "A boolean value is required."
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        with transaction.atomic():
+
+            department = get_object_or_404(
+                Department.objects.select_for_update(),
+                id=department_id
+            )
+
+            if not request.user.is_superuser:
+
+                is_administrator = DepartmentMembership.objects.filter(
+                    user=request.user,
+                    department=department,
+                    role__name="Administrator"
+                ).exists()
+
+                if not is_administrator:
+                    return Response(
+                        data={
+                            "message": (
+                                "You cannot manage task assignments "
+                                "for this department."
+                            )
+                        },
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+
+            if not department.is_active:
+                return Response(
+                    data={
+                        "message": (
+                            "Cannot modify task assignment acceptance "
+                            "of an inactive department."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            previous_accepts_new_tasks = department.accepts_new_tasks
+
+            if previous_accepts_new_tasks != accepts_new_tasks:
+
+                department.accepts_new_tasks = accepts_new_tasks
+
+                department.save(
+                    update_fields=["accepts_new_tasks"]
+                )
+
+                record_audit_event(
+                    actor=request.user,
+                    action="department.task_acceptance.updated",
+                    target=department,
+                    metadata={
+                        "previous_accepts_new_tasks": (
+                            previous_accepts_new_tasks
+                        ),
+                        "new_accepts_new_tasks": accepts_new_tasks,
+                    }
+                )
+
+        serializer = DepartmentSerializer(department)
+
+        return Response(
+            data=serializer.data,
             status=status.HTTP_200_OK
         )
 
