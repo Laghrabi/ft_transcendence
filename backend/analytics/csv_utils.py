@@ -7,5 +7,7 @@ def summary_to_csv(summary):
     response["Content-Disposition"] = 'attachment; filename="analytics-summary.csv"'
     writer = csv.writer(response)
     writer.writerow(["metric", "value"])
-    
+    for metric, value in summary.items():
+        writer.writerow([metric, value])
+        
     return response

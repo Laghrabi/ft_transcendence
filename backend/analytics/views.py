@@ -17,3 +17,12 @@ class AnalyticsSummaryAPIView(APIView):
         dates = serializer.validated_data
         return Response({"detail": "Analytics calculations are not implemented yet."}, status=501)
     # def post(self, request):
+
+
+class AnalyticsExportAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        serializer = AnalyticsDateRangeSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        dates = serializer.validated_data
+        return Response({"detail": "Analytics export is not implemented yet."}, status=501)
