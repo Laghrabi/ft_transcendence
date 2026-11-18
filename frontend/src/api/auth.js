@@ -12,10 +12,8 @@ async function readResponse(response) {
         : data?.error || data?.message || data?.detail ||
           (data && Object.values(data).flat().join(" "))) ||
       `Request failed (${response.status})`;
-
     throw new Error(message);
   }
-
   return data;
 }
 
@@ -55,7 +53,7 @@ async function postAuth(endpoint, body) {
 
   const response = await authFetch(endpoint, {
     method: "POST",
-    credentials: "include",
+    credentials: "include", 
     headers: {
       "Content-Type": "application/json",
       "X-CSRFToken": csrfToken,
@@ -66,11 +64,13 @@ async function postAuth(endpoint, body) {
   return readResponse(response);
 }
 
-export function registerUser(name, email, password) {
+export function registerUser(name, email, password, role, department) {
   return postAuth("/api/auth/register/", {
     name,
     email,
     password,
+    requested_role: role,
+    requested_department: department,
   });
 }
 
@@ -83,6 +83,14 @@ export function loginUser(email, password) {
 
 export async function getCurrentUser() {
   const response = await authFetch("/api/auth/me/", {
+    credentials: "include",
+  });
+
+  return readResponse(response);
+}
+
+export async function getDepartments() {
+  const response = await authFetch("/api/auth/departments/", {
     credentials: "include",
   });
 

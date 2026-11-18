@@ -1,7 +1,7 @@
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { registerUser } from "../../api/auth";
+import { registerUser, getDepartments } from "../../api/auth";
 import "../../styles/Register.css";
 
 function RegisterLeftPanel() {
@@ -59,13 +59,50 @@ function RegisterRightPanel() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
+  const [departments, setDepartments] = useState([]);
+  const [departmentsLoading, setDepartmentsLoading] = useState(true);
+  const [departmentsError, setDepartmentsError] = useState(false);
+
+  useEffect(() => {
+    async function loadDepartments() {
+      try {
+        const data = await getDepartments();
+
+        const departmentList = Array.isArray(data)
+          ? data
+          : data.departments || [];
+
+        setDepartments(
+          departmentList.filter(
+            (department) => department.is_active === true
+          )
+        );
+      } catch (err) {
+        setDepartmentsError(true);
+        setError("Unable to load departments. Please try again later.");
+      } finally {
+        setDepartmentsLoading(false);
+      }
+    }
+
+    loadDepartments();
+  }, []);
+
   const hasLength = password.length >= 8;
   const hasNumber = /\d/.test(password);
   const hasSymbol = /[^a-zA-Z0-9\s]/.test(password);
 
   async function handleSubmit(event) {
     event.preventDefault();
-    if (loading) return;
+
+    if (
+      loading ||
+      departmentsLoading ||
+      departmentsError ||
+      departments.length === 0
+    ) {
+      return;
+    }
 
     setError("");
     setSuccess("");
@@ -76,9 +113,16 @@ function RegisterRightPanel() {
     const name = formData.get("name").trim();
     const email = formData.get("email").trim();
     const confirmPassword = formData.get("confirmPassword");
+    const role = formData.get("role");
+    const department = formData.get("department");
 
     if (!name) {
       setError("Please enter your full name.");
+      return;
+    }
+
+    if (!role || !department) {
+      setError("Please select your role and department.");
       return;
     }
 
@@ -95,11 +139,17 @@ function RegisterRightPanel() {
     setLoading(true);
 
     try {
-      const data = await registerUser(name, email, password);
+      const data = await registerUser(
+        name,
+        email,
+        password,
+        role,
+        department
+      );
 
       setSuccess(
         data.message ||
-          "Registration successful. Awaiting administrator approval."
+        "Registration successful. Awaiting administrator approval."
       );
 
       form.reset();
@@ -118,7 +168,11 @@ function RegisterRightPanel() {
         <p>Register for operational workflow access and floor shifts.</p>
       </header>
 
-      <form className="register-form" onSubmit={handleSubmit} aria-busy={loading}>
+      <form
+        className="register-form"
+        onSubmit={handleSubmit}
+        aria-busy={loading}
+      >
         <div className="register-field">
           <label htmlFor="register-name">FULL NAME</label>
           <input
@@ -141,6 +195,55 @@ function RegisterRightPanel() {
             autoComplete="email"
             required
           />
+        </div>
+
+        {/* ROLE DROPDOWN */}
+        <div className="register-field">
+          <label htmlFor="register-role">ROLE</label>
+          <select
+            id="register-role"
+            name="role"
+            defaultValue=""
+            required
+          >
+            <option value="" disabled>
+              Select your role
+            </option>
+            <option value="doctor">Doctor</option>
+            <option value="nurse">Nurse</option>
+          </select>
+        </div>
+
+        {/* DEPARTMENT DROPDOWN */}
+        <div className="register-field">
+          <label htmlFor="register-department">DEPARTMENT</label>
+          <select
+            id="register-department"
+            name="department"
+            defaultValue=""
+            required
+            disabled={
+              departmentsLoading ||
+              departmentsError ||
+              departments.length === 0
+            }
+          >
+            <option value="" disabled>
+              {departmentsLoading
+                ? "Loading departments..."
+                : departmentsError
+                  ? "Unable to load departments"
+                  : departments.length === 0
+                    ? "No departments available"
+                    : "Select your department"}
+            </option>
+
+            {departments.map((department) => (
+              <option key={department.id} value={department.id}>
+                {department.name}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="register-field">
@@ -213,7 +316,12 @@ function RegisterRightPanel() {
         <button
           className="register-submit"
           type="submit"
-          disabled={loading}
+          disabled={
+            loading ||
+            departmentsLoading ||
+            departmentsError ||
+            departments.length === 0
+          }
         >
           {loading ? "Creating account..." : "Complete Registration"}
           <span aria-hidden="true"> →</span>
