@@ -12,6 +12,13 @@ from django.db.models.deletion import ProtectedError
 from .models import Department, Role, DepartmentMembership, RolePermission
 from unittest.mock import patch
 from .permissions import can_manage_department
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
+from django.test import TestCase
+from .permissions import (
+    can_participate_in_tasks,
+    can_receive_new_tasks,
+)
 
 
 class AuthenticationTests(APITestCase):
@@ -9632,3 +9639,146 @@ class RegistrationLifecycleGuardTests(APITestCase):
         self.assertEqual(response.status_code, 403)
         pending.refresh_from_db()
         self.assertEqual(pending.approval_status, "pending")
+
+class TaskPermissionHelperTests(TestCase):
+
+    def setUp(self):
+        User = get_user_model()
+
+        self.department = Department.objects.create(
+            name="Cardiology",
+            is_active=True,
+            accepts_new_tasks=True
+        )
+
+        self.paused_department = Department.objects.create(
+            name="Emergency",
+            is_active=True,
+            accepts_new_tasks=False
+        )
+
+        self.inactive_department = Department.objects.create(
+            name="Radiology",
+            is_active=False,
+            accepts_new_tasks=True
+        )
+
+        self.nurse_role = Role.objects.get(name="Nurse")
+        self.doctor_role = Role.objects.get(name="Doctor")
+        self.administrator_role = Role.objects.get(
+            name="Administrator"
+        )
+
+        self.user = User.objects.create_user(
+            email="fatima@example.com",
+            name="Fatima",
+            password="StrongPassword123!",
+            is_active=True,
+            approval_status="approved"
+        )
+
+        self.membership = DepartmentMembership.objects.create(
+            user=self.user,
+            department=self.department,
+            role=self.nurse_role
+        )
+
+    # ==========================================
+    # Task participation tests
+    # ==========================================
+
+    def test_approved_nurse_can_participate(self):
+        self.assertTrue(
+            can_participate_in_tasks(self.user)
+        )
+
+    def test_approved_doctor_can_participate(self):
+        self.membership.role = self.doctor_role
+        self.membership.save(update_fields=["role"])
+
+        self.assertTrue(
+            can_participate_in_tasks(self.user)
+        )
+
+    def test_administrator_can_participate(self):
+        self.membership.role = self.administrator_role
+        self.membership.save(update_fields=["role"])
+
+        self.assertTrue(
+            can_participate_in_tasks(self.user)
+        )
+
+    def test_pending_user_cannot_participate(self):
+        self.user.approval_status = "pending"
+        self.user.save(update_fields=["approval_status"])
+
+        self.assertFalse(
+            can_participate_in_tasks(self.user)
+        )
+
+    def test_inactive_user_cannot_participate(self):
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+
+        self.assertFalse(
+            can_participate_in_tasks(self.user)
+        )
+
+    def test_user_without_membership_cannot_participate(self):
+        self.membership.delete()
+
+        self.assertFalse(
+            can_participate_in_tasks(self.user)
+        )
+
+    def test_inactive_department_membership_cannot_participate(self):
+        self.membership.department = self.inactive_department
+        self.membership.save(update_fields=["department"])
+
+        self.assertFalse(
+            can_participate_in_tasks(self.user)
+        )
+
+    def test_anonymous_user_cannot_participate(self):
+        self.assertFalse(
+            can_participate_in_tasks(AnonymousUser())
+        )
+
+    def test_none_user_cannot_participate(self):
+        self.assertFalse(
+            can_participate_in_tasks(None)
+        )
+
+    # ==========================================
+    # Department task acceptance tests
+    # ==========================================
+
+    def test_active_department_accepts_tasks(self):
+        self.assertTrue(
+            can_receive_new_tasks(self.department.id)
+        )
+
+    def test_paused_department_rejects_new_tasks(self):
+        self.assertFalse(
+            can_receive_new_tasks(self.paused_department.id)
+        )
+
+    def test_inactive_department_rejects_new_tasks(self):
+        self.assertFalse(
+            can_receive_new_tasks(self.inactive_department.id)
+        )
+
+    def test_nonexistent_department_rejects_new_tasks(self):
+        self.assertFalse(
+            can_receive_new_tasks(999999)
+        )
+
+    def test_resumed_department_accepts_new_tasks(self):
+        self.paused_department.accepts_new_tasks = True
+        self.paused_department.save(
+            update_fields=["accepts_new_tasks"]
+        )
+
+        self.assertTrue(
+            can_receive_new_tasks(self.paused_department.id)
+        )
