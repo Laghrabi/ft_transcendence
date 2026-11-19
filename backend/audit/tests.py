@@ -555,7 +555,7 @@ class DepartmentAuditIntegrationTests(AuditEndpointTestBase):
     def test_deactivation_and_audit_rollback_together(self):
         url = self.url("department-deactivate", department_id=self.department.id)
         with patch(
-            "accounts.views.record_audit_event",
+            "organizations.views.record_audit_event",
             side_effect=RuntimeError("Audit write failed"),
         ):
             with self.assertRaisesRegex(RuntimeError, "Audit write failed"):
