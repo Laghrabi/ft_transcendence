@@ -158,3 +158,22 @@ def can_view_department_analytics(user, department):
         ).exists()
 
     return can_manage_department(user, department_id)
+
+def can_view_case(user, case):
+    """
+    Allow authenticated, active, approved users to view any case.
+
+    Case visibility is not restricted by department,
+    role, or task assignment.
+    """
+
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+
+    if not user.is_active:
+        return False
+
+    if user.approval_status != "approved":
+        return False
+
+    return True

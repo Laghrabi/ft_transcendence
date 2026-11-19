@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'accounts.apps.AccountsConfig',
     "audit.apps.AuditConfig",
+    "organizations.apps.OrganizationsConfig",
 ]
 
 MIDDLEWARE = [
