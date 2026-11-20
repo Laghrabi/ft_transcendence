@@ -509,25 +509,22 @@ class StaffListView(APIView):
 @method_decorator(csrf_protect, name="dispatch")
 class DeactivateStaffView(APIView):
     """
-    Allow superusers to deactivate approved staff accounts.
+    Deactivate an approved staff account.
+
+    Superusers can deactivate staff across all departments.
+
+    Department Administrators can deactivate staff belonging
+    to at least one active department they administer.
 
     Prevents self-deactivation and deactivation of users
-    who are currently Department Administrators.
+    who currently hold a Department Administrator role.
 
-    Records successful deactivations in the audit trail.
+    Successful deactivations are recorded in the audit trail.
     """
 
     permission_classes = [IsApprovedUser]
 
     def post(self, request, user_id):
-
-        if not request.user.is_superuser:
-            return Response(
-                data={
-                    "message": "Administrator access required."
-                },
-                status=status.HTTP_403_FORBIDDEN
-            )
 
         if request.user.id == user_id:
             return Response(
@@ -536,6 +533,30 @@ class DeactivateStaffView(APIView):
                 },
                 status=status.HTTP_403_FORBIDDEN
             )
+
+        if not request.user.is_superuser:
+
+            managed_departments = DepartmentMembership.objects.filter(
+                user=request.user,
+                role__name="Administrator",
+                department__is_active=True
+            ).values_list("department_id", flat=True)
+
+            can_deactivate = DepartmentMembership.objects.filter(
+                user_id=user_id,
+                department_id__in=managed_departments
+            ).exists()
+
+            if not can_deactivate:
+                return Response(
+                    data={
+                        "message": (
+                            "You can only deactivate staff belonging "
+                            "to a department you administer."
+                        )
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
         with transaction.atomic():
 
@@ -597,11 +618,17 @@ class DeactivateStaffView(APIView):
 @method_decorator(csrf_protect, name="dispatch")
 class ActivateStaffView(APIView):
     """
-    Allow superusers to activate approved staff accounts.
+    Reactivate an approved staff account.
+
+    Superusers can reactivate staff across all departments.
+
+    Any approved, active Department Administrator belonging
+    to at least one active department can reactivate staff,
+    regardless of the target staff member's department.
 
     Prevents activating accounts that are already active.
 
-    Records successful activations in the audit trail.
+    Successful activations are recorded in the audit trail.
     """
 
     permission_classes = [IsApprovedUser]
@@ -609,12 +636,20 @@ class ActivateStaffView(APIView):
     def post(self, request, user_id):
 
         if not request.user.is_superuser:
-            return Response(
-                data={
-                    "message": "Administrator access required."
-                },
-                status=status.HTTP_403_FORBIDDEN
-            )
+
+            is_administrator = DepartmentMembership.objects.filter(
+                user=request.user,
+                role__name="Administrator",
+                department__is_active=True
+            ).exists()
+
+            if not is_administrator:
+                return Response(
+                    data={
+                        "message": "Administrator access required."
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
         with transaction.atomic():
 
@@ -654,8 +689,6 @@ class ActivateStaffView(APIView):
             },
             status=status.HTTP_200_OK
         )
-
-
 
 @require_GET
 def generate_token(request):
