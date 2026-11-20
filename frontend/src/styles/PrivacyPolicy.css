@@ -5,10 +5,34 @@ body {
     font-family: Georgia, "Times New Roman", serif;
 }
 
-.privacy-page {
+.privacy-section {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    padding: 20px;
+    border-radius: 18px;
+    background:#f7f4ef;
+    box-sizing: border-box;
+}
+
+.privacy-page{
     display: flex;
     flex-direction: column;
     width: min(1200px, 100%);
-    border-radius: 28px;
+    padding: 20px;
+    border-radius: 18px;
     background: #fff;
+    box-sizing: border-box;
+    margin: 0 auto;
+    gap: 20px;
+
+}
+
+.privacy-section h2{
+   color: #4c8060;
+}
+
+@media (max-width: 600px){
+
+   .privacy-page{padding: 12px;}
 }
