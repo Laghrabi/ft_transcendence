@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.test import TestCase
 
-from accounts.models import Department, DepartmentMembership, Role
+from organizations.models import Department, DepartmentMembership, Role
 from accounts.permissions import (
     can_initiate_task_assignment_to_department,
     can_receive_task_in_department,

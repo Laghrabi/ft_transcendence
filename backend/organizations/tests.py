@@ -4,7 +4,8 @@ from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APIRequestFactory, force_authenticate
 
-from accounts.models import User, Role, Department, DepartmentMembership
+from accounts.models import User
+from organizations.models import Role, Department, DepartmentMembership
 from organizations.views import (
     DepartmentMembershipListCreateView,
     DepartmentMembershipDetailView,

@@ -1,5 +1,5 @@
 from rest_framework.permissions import BasePermission
-from .models import DepartmentMembership, Department
+from organizations.models import DepartmentMembership, Department
 
 class IsApprovedUser(BasePermission):
     def has_permission(self, request, view):

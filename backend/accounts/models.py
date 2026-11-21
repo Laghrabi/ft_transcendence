@@ -1,5 +1,6 @@
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+
 from .managers import UserManager
 
 
@@ -13,9 +14,22 @@ class User(AbstractUser):
     username = None
 
     name = models.CharField(max_length=100)
-    email = models.EmailField(max_length=255, unique=True)
-    avatar = models.CharField(max_length=500, null=True, blank=True)
-    status = models.CharField(max_length=20, default="offline")
+
+    email = models.EmailField(
+        max_length=255,
+        unique=True
+    )
+
+    avatar = models.CharField(
+        max_length=500,
+        null=True,
+        blank=True
+    )
+
+    status = models.CharField(
+        max_length=20,
+        default="offline"
+    )
 
     approval_status = models.CharField(
         max_length=10,
@@ -29,10 +43,12 @@ class User(AbstractUser):
         default=""
     )
 
-    show_phone_number = models.BooleanField(default=False)
+    show_phone_number = models.BooleanField(
+        default=False
+    )
 
     requested_department = models.ForeignKey(
-        "Department",
+        "organizations.Department",
         on_delete=models.PROTECT,
         null=True,
         blank=True,
@@ -40,7 +56,7 @@ class User(AbstractUser):
     )
 
     requested_role = models.ForeignKey(
-        "Role",
+        "organizations.Role",
         on_delete=models.PROTECT,
         null=True,
         blank=True,
@@ -54,79 +70,3 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.email
-
-class Department(models.Model):
-    name = models.CharField(
-        max_length=100,
-        unique=True
-    )
-    description = models.TextField(
-        blank=True
-    )
-    is_active = models.BooleanField(default=True)
-    accepts_new_tasks = models.BooleanField(default=True)
-
-    def __str__(self):
-        return self.name
-
-
-class Role(models.Model):
-    name = models.CharField(
-        max_length=100,
-        unique=True
-    )
-    description = models.TextField(
-        blank=True
-    )
-
-    def __str__(self):
-        return self.name
-
-
-class DepartmentMembership(models.Model):
-    user = models.ForeignKey(
-        User,
-        on_delete=models.CASCADE
-    )
-
-    department = models.ForeignKey(
-        Department,
-        on_delete=models.PROTECT
-    )
-
-    role = models.ForeignKey(
-        Role,
-        on_delete=models.PROTECT
-    )
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=["user", "department"],
-                name="unique_user_department"
-            )
-        ]
-
-    def __str__(self):
-        return f"{self.user.name} - {self.department.name} - {self.role.name}"
-
-
-class RolePermission(models.Model):
-    role = models.ForeignKey(
-        Role,
-        on_delete=models.CASCADE,
-        related_name="permissions"
-    )
-
-    codename = models.CharField(max_length=100)
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=["role", "codename"],
-                name="unique_role_permission"
-            )
-        ]
-
-    def __str__(self):
-        return f"{self.role.name} - {self.codename}"

@@ -9,7 +9,12 @@ from .serializers import UserProfileSerializer
 from django.urls import reverse
 from django.db import IntegrityError, transaction
 from django.db.models.deletion import ProtectedError
-from .models import Department, Role, DepartmentMembership, RolePermission
+from organizations.models import (
+    Department,
+    Role,
+    DepartmentMembership,
+    RolePermission,
+)
 from unittest.mock import patch
 from .permissions import can_manage_department
 from django.contrib.auth import get_user_model

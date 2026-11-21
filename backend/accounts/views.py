@@ -10,7 +10,8 @@ from django.views.decorators.http import require_GET
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.shortcuts import get_object_or_404
 from django.db import transaction
-from .models import User, Department, DepartmentMembership
+from .models import User
+from organizations.models import Department, DepartmentMembership
 from .permissions import IsApprovedUser, can_manage_department
 from .serializers import (
     RegisterSerializer,

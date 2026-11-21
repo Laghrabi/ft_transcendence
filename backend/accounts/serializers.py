@@ -1,7 +1,8 @@
 from rest_framework import serializers
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
-from .models import User, Department, Role
+from .models import User
+from organizations.models import Department, Role
 from organizations.serializers import (
     DepartmentSerializer,
     DepartmentCreateSerializer,

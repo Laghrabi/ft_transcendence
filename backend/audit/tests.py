@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.db import transaction
 from django.test import TestCase
-from accounts.models import Department, DepartmentMembership, Role
+from organizations.models import Department, DepartmentMembership, Role
 from .models import AuditEvent
 from .services import record_audit_event
 from django.urls import reverse
@@ -46,7 +46,7 @@ class AuditEventTests(TestCase):
         )
         self.assertEqual(
             event.target_type,
-            "accounts.Department",
+            "organizations.Department",
         )
         self.assertEqual(
             event.target_id,
@@ -208,7 +208,7 @@ class AuditEventTests(TestCase):
 
         self.assertEqual(
             event.target_type,
-            "accounts.Department",
+            "organizations.Department",
         )
         self.assertEqual(
             event.target_id,
@@ -273,7 +273,7 @@ class DepartmentTaskAcceptanceAuditTests(TestCase):
 
         events = AuditEvent.objects.filter(
             actor=self.admin,
-            target_type="accounts.Department",
+            target_type="organizations.Department",
             target_id=self.department.id
         )
 

@@ -1,15 +1,13 @@
 from django.db import transaction
 from rest_framework import serializers
-
-from accounts.models import (
-    User,
+from accounts.models import User
+from .models import (
     Department,
     DepartmentMembership,
     Role,
     RolePermission,
 )
 from accounts.permissions_catalog import ALLOWED_PERMISSIONS
-
 
 class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:
