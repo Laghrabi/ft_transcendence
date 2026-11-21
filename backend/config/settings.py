@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'accounts.apps.AccountsConfig',
     "audit.apps.AuditConfig",
     "organizations.apps.OrganizationsConfig",
+    'collaboration.apps.CollaborationConfig',
 ]
 
 MIDDLEWARE = [
