@@ -1,7 +1,25 @@
-
+import { useState, useEffect } from "react";
+import { getNotifications } from "../../api/notifications";
 import "../../styles/Dashboard.css";
 
 export default function Dashboard() {
+  const [search, setSearch] = useState("");
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+
+  useEffect(() => {
+    async function loadNotifications() {
+      try {
+        const data = await getNotifications();
+        setNotifications(data);
+      }
+      catch (error) {
+        console.error("Error fetching notifications:", error);
+      }
+    }
+    loadNotifications();
+  }, []);
+
   return (
     <div className="cf-dashboard">
       <aside className="cf-sidebar">
@@ -86,6 +104,8 @@ export default function Dashboard() {
               type="search"
               placeholder="Search cases, workflows, or staff..."
               aria-label="Search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
             />
           </div>
 
@@ -95,14 +115,39 @@ export default function Dashboard() {
               System Active
             </div>
 
-            <button
-              type="button"
-              className="cf-icon-button cf-notifications"
-              aria-label="Notifications"
-            >
-              <span className="material-symbols-outlined">notifications</span>
-              <span className="cf-notification-count">3</span>
-            </button>
+            <div className="cf-notification-wrapper">
+              <button
+                type="button"
+                className="cf-icon-button cf-notifications"
+                aria-label="Notifications"
+                aria-expanded={showNotifications}
+                onClick={() =>
+                  setShowNotifications(!showNotifications)
+                }
+              >
+                <span className="material-symbols-outlined">
+                  notifications
+                </span>
+                <span className="cf-notification-count">3</span>
+              </button>
+
+              {showNotifications && (
+                <div className="cf-notification-panel">
+                  <h3>Notifications</h3>
+
+                  {notifications.length === 0 ? (
+                    <p>No notifications yet.</p>
+                  ) : (
+                    notifications.map((notification) => (
+                      <p key={notification.id}>
+                        {notification.message}
+                      </p>
+                    ))
+                  )}
+                </div>
+              )}
+
+            </div>
 
             <div className="cf-profile">
               <div className="cf-profile-text">
@@ -130,7 +175,9 @@ export default function Dashboard() {
 
               <h1>
                 Good morning, Elena Rostova
-                <span className="cf-role-title"> — Lead Coordinator</span>
+                <span className="cf-role-title">
+                  {" "}— Lead Coordinator
+                </span>
               </h1>
 
               <p>
@@ -147,7 +194,9 @@ export default function Dashboard() {
               </button>
 
               <a href="/cases/new" className="cf-button cf-button-primary">
-                <span className="material-symbols-outlined">add_circle</span>
+                <span className="material-symbols-outlined">
+                  add_circle
+                </span>
                 Initiate New Case
               </a>
             </div>
@@ -158,14 +207,18 @@ export default function Dashboard() {
               <div className="cf-stat-top">
                 <span className="cf-stat-label">ACTIVE CASES</span>
                 <span className="cf-stat-icon green">
-                  <span className="material-symbols-outlined">folder_open</span>
+                  <span className="material-symbols-outlined">
+                    folder_open
+                  </span>
                 </span>
               </div>
 
               <div className="cf-stat-value">
                 <strong>42</strong>
                 <span className="cf-positive">
-                  <span className="material-symbols-outlined">trending_up</span>
+                  <span className="material-symbols-outlined">
+                    trending_up
+                  </span>
                   +4 this shift
                 </span>
               </div>
@@ -206,7 +259,9 @@ export default function Dashboard() {
               <div className="cf-stat-top">
                 <span className="cf-stat-label">BLOCKED / OVERDUE</span>
                 <span className="cf-stat-icon amber">
-                  <span className="material-symbols-outlined">warning</span>
+                  <span className="material-symbols-outlined">
+                    warning
+                  </span>
                 </span>
               </div>
 
@@ -218,7 +273,9 @@ export default function Dashboard() {
               <p>2 Pharmacy review delays, 1 Radiology sign-off</p>
 
               <div className="cf-stat-bottom cf-warning-text">
-                <span className="material-symbols-outlined">schedule</span>
+                <span className="material-symbols-outlined">
+                  schedule
+                </span>
                 Avg delay time: +38m
               </div>
             </article>
@@ -227,7 +284,9 @@ export default function Dashboard() {
               <div className="cf-stat-top">
                 <span className="cf-stat-label">COMPLETED TODAY</span>
                 <span className="cf-stat-icon green">
-                  <span className="material-symbols-outlined">task_alt</span>
+                  <span className="material-symbols-outlined">
+                    task_alt
+                  </span>
                 </span>
               </div>
 
@@ -239,7 +298,9 @@ export default function Dashboard() {
               <p>Average turnaround: 46 mins across all queues</p>
 
               <div className="cf-stat-bottom cf-positive">
-                <span className="material-symbols-outlined">verified</span>
+                <span className="material-symbols-outlined">
+                  verified
+                </span>
                 Target SLA met: 92.4%
               </div>
             </article>
@@ -286,7 +347,9 @@ export default function Dashboard() {
 
                 <div className="cf-work-card-footer">
                   <div className="cf-work-meta">
-                    <span className="material-symbols-outlined">swap_horiz</span>
+                    <span className="material-symbols-outlined">
+                      swap_horiz
+                    </span>
                     Handover: <strong>ICU → Step-Down</strong>
                   </div>
 
@@ -335,7 +398,9 @@ export default function Dashboard() {
 
                 <div className="cf-work-card-footer">
                   <div className="cf-work-meta">
-                    <span className="material-symbols-outlined">timer</span>
+                    <span className="material-symbols-outlined">
+                      timer
+                    </span>
                     Stalled for <strong>32 mins</strong>
                   </div>
 
@@ -402,7 +467,9 @@ export default function Dashboard() {
 
               <a href="/my-tasks" className="cf-view-all">
                 View All Tasks
-                <span className="material-symbols-outlined">arrow_forward</span>
+                <span className="material-symbols-outlined">
+                  arrow_forward
+                </span>
               </a>
             </section>
 
@@ -436,7 +503,9 @@ export default function Dashboard() {
                   </div>
                   <div>
                     <span>STATUS</span>
-                    <strong className="cf-status-progress">In Progress</strong>
+                    <strong className="cf-status-progress">
+                      In Progress
+                    </strong>
                   </div>
                   <div>
                     <span>DEADLINE</span>
@@ -470,7 +539,9 @@ export default function Dashboard() {
                   </div>
                   <div>
                     <span>STATUS</span>
-                    <strong className="cf-status-blocked">Blocked</strong>
+                    <strong className="cf-status-blocked">
+                      Blocked
+                    </strong>
                   </div>
                   <div>
                     <span>DEADLINE</span>
@@ -504,7 +575,9 @@ export default function Dashboard() {
                   </div>
                   <div>
                     <span>STATUS</span>
-                    <strong className="cf-status-progress">In Progress</strong>
+                    <strong className="cf-status-progress">
+                      In Progress
+                    </strong>
                   </div>
                   <div>
                     <span>DEADLINE</span>
@@ -521,7 +594,9 @@ export default function Dashboard() {
 
               <a href="/my-tasks" className="cf-assigned-link">
                 View Task Directory
-                <span className="material-symbols-outlined">arrow_forward</span>
+                <span className="material-symbols-outlined">
+                  arrow_forward
+                </span>
               </a>
             </section>
           </div>
@@ -552,7 +627,9 @@ export default function Dashboard() {
               <article className="cf-department-card">
                 <div className="cf-department-name">
                   <strong>EMERGENCY</strong>
-                  <span className="material-symbols-outlined">emergency</span>
+                  <span className="material-symbols-outlined">
+                    emergency
+                  </span>
                 </div>
                 <div className="cf-department-count">
                   <strong>12</strong>
@@ -584,7 +661,9 @@ export default function Dashboard() {
               <article className="cf-department-card">
                 <div className="cf-department-name">
                   <strong>RADIOLOGY</strong>
-                  <span className="material-symbols-outlined">view_in_ar</span>
+                  <span className="material-symbols-outlined">
+                    view_in_ar
+                  </span>
                 </div>
                 <div className="cf-department-count">
                   <strong>8</strong>
@@ -599,7 +678,9 @@ export default function Dashboard() {
               <article className="cf-department-card warning">
                 <div className="cf-department-name">
                   <strong>PHARMACY</strong>
-                  <span className="material-symbols-outlined">medication</span>
+                  <span className="material-symbols-outlined">
+                    medication
+                  </span>
                 </div>
                 <div className="cf-department-count">
                   <strong>7</strong>
