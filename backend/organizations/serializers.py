@@ -52,9 +52,21 @@ class DepartmentCreateSerializer(serializers.ModelSerializer):
         ]
 
     def validate_administrator(self, value):
+
         if not value.is_active or value.approval_status != "approved":
             raise serializers.ValidationError(
                 "The administrator must be an active, approved user."
+            )
+
+        if (
+            not value.is_superuser
+            and (
+                value.requested_role_id is None
+                or value.requested_role.name not in ("Nurse", "Doctor")
+            )
+        ):
+            raise serializers.ValidationError(
+                "A staff Administrator must be a registered Nurse or Doctor."
             )
 
         return value
@@ -80,6 +92,19 @@ class DepartmentCreateSerializer(serializers.ModelSerializer):
                     ]
                 })
 
+            if (
+                not administrator.is_superuser
+                and (
+                    administrator.requested_role_id is None
+                    or administrator.requested_role.name not in ("Nurse", "Doctor")
+                )
+            ):
+                raise serializers.ValidationError({
+                    "administrator": [
+                        "A staff Administrator must be a registered Nurse or Doctor."
+                    ]
+                })
+
             administrator_role = Role.objects.get(
                 name="Administrator"
             )
@@ -96,26 +121,37 @@ class DepartmentCreateSerializer(serializers.ModelSerializer):
 
         return department
 
-
 class DepartmentMembershipSerializer(serializers.ModelSerializer):
     """
-    Serialize and validate staff department memberships.
+    Serialize department memberships.
 
-    Manages the relationship between users, departments, and roles.
-    Supports creating and updating memberships, while keeping
-    the membership ID read-only.
+    Clinical roles are assigned automatically from the user's
+    registered profession. They cannot be selected or changed
+    through this serializer.
     """
 
     class Meta:
         model = DepartmentMembership
+
         fields = [
             "id",
             "user",
             "department",
             "role",
         ]
-        read_only_fields = ["id"]
 
+        read_only_fields = ["id", "role"]
+
+    def validate(self, attrs):
+
+        if "role" in self.initial_data:
+            raise serializers.ValidationError({
+                "role": [
+                    "The membership role is assigned automatically."
+                ]
+            })
+
+        return attrs
 
 class RoleSerializer(serializers.ModelSerializer):
     class Meta:
@@ -145,7 +181,6 @@ class RolePermissionSerializer(serializers.ModelSerializer):
             )
 
         return value
-
 
 class TransferDepartmentAdministratorSerializer(serializers.Serializer):
     new_administrator = serializers.PrimaryKeyRelatedField(

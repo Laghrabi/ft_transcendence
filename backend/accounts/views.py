@@ -296,12 +296,12 @@ class ApproveRegistrationView(APIView):
                     status=status.HTTP_409_CONFLICT
                 )
 
-            if user.requested_role.name == "Administrator":
+            if user.requested_role.name not in ("Nurse", "Doctor"):
                 return Response(
                     data={
                         "message": (
-                            "Administrator roles cannot be assigned "
-                            "through registration approval."
+                            "Only Nurse or Doctor registrations "
+                            "can be approved."
                         )
                     },
                     status=status.HTTP_403_FORBIDDEN

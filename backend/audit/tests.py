@@ -392,6 +392,11 @@ class AuditEndpointTestBase(TestCase):
         self.administrator_role = Role.objects.get(name="Administrator")
         self.nurse_role = Role.objects.get(name="Nurse")
         self.doctor_role = Role.objects.get(name="Doctor")
+        self.staff.requested_role = self.nurse_role
+        self.staff.save(update_fields=["requested_role"])
+
+        self.second_staff.requested_role = self.nurse_role
+        self.second_staff.save(update_fields=["requested_role"])
         self.client = APIClient()
         self.client.force_authenticate(user=self.admin)
 
@@ -731,18 +736,39 @@ class RegistrationAuditIntegrationTests(AuditEndpointTestBase):
 
 class MembershipAuditIntegrationTests(AuditEndpointTestBase):
 
+    def setUp(self):
+        super().setUp()
+
+        # Give staff members their permanent clinical professions.
+        self.staff.requested_role = self.nurse_role
+        self.staff.save(update_fields=["requested_role"])
+
+        self.second_staff.requested_role = self.nurse_role
+        self.second_staff.save(update_fields=["requested_role"])
+
     def test_membership_creation_logs_user_department_and_role(self):
+
         response = self.client.post(
             self.url("membership-list-create"),
             {
                 "user": self.staff.id,
                 "department": self.department.id,
-                "role": self.nurse_role.id,
             },
             format="json",
         )
+
         self.assertEqual(response.status_code, 201)
-        membership = DepartmentMembership.objects.get(pk=response.data["id"])
+
+        membership = DepartmentMembership.objects.get(
+            pk=response.data["id"]
+        )
+
+        # The role was assigned automatically.
+        self.assertEqual(
+            membership.role,
+            self.nurse_role
+        )
+
         self.assert_audit(
             "department.membership.created",
             membership,
@@ -754,68 +780,134 @@ class MembershipAuditIntegrationTests(AuditEndpointTestBase):
         )
 
     def test_duplicate_membership_creation_does_not_log(self):
+
         DepartmentMembership.objects.create(
-            user=self.staff, department=self.department, role=self.nurse_role
+            user=self.staff,
+            department=self.department,
+            role=self.nurse_role,
         )
+
         response = self.client.post(
             self.url("membership-list-create"),
             {
                 "user": self.staff.id,
                 "department": self.department.id,
-                "role": self.nurse_role.id,
             },
             format="json",
         )
+
         self.assertEqual(response.status_code, 400)
+
+        self.assertEqual(
+            DepartmentMembership.objects.filter(
+                user=self.staff,
+                department=self.department,
+            ).count(),
+            1,
+        )
+
         self.assertFalse(AuditEvent.objects.exists())
 
-    def test_membership_role_change_logs_previous_and_new_roles(self):
+    def test_membership_role_change_is_rejected_without_audit(self):
+
         membership = DepartmentMembership.objects.create(
-            user=self.staff, department=self.department, role=self.nurse_role
+            user=self.staff,
+            department=self.department,
+            role=self.nurse_role
         )
+
         response = self.client.patch(
-            self.url("membership-detail", membership_id=membership.id),
-            {"role": self.doctor_role.id},
-            format="json",
-        )
-        self.assertEqual(response.status_code, 200)
-        membership.refresh_from_db()
-        self.assertEqual(membership.role_id, self.doctor_role.id)
-        self.assert_audit(
-            "department.membership.role_updated",
-            membership,
+            self.url(
+                "membership-detail",
+                membership_id=membership.id
+            ),
             {
-                "user_id": self.staff.id,
-                "department_id": self.department.id,
-                "previous_role_id": self.nurse_role.id,
-                "previous_role_name": "Nurse",
-                "new_role_id": self.doctor_role.id,
-                "new_role_name": "Doctor",
+                "role": self.doctor_role.id
             },
-        )
-
-    def test_unchanged_membership_role_does_not_log(self):
-        membership = DepartmentMembership.objects.create(
-            user=self.staff, department=self.department, role=self.nurse_role
-        )
-        response = self.client.patch(
-            self.url("membership-detail", membership_id=membership.id),
-            {"role": self.nurse_role.id},
             format="json",
         )
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(AuditEvent.objects.exists())
+
+        self.assertEqual(response.status_code, 405)
+
+        membership.refresh_from_db()
+
+        # The staff member remains a Nurse.
+        self.assertEqual(
+            membership.role,
+            self.nurse_role
+        )
+
+        # A rejected operation must not generate an audit record.
+        self.assertFalse(
+            AuditEvent.objects.exists()
+        )
+
+    def test_unchanged_membership_role_patch_is_rejected(self):
+
+        membership = DepartmentMembership.objects.create(
+            user=self.staff,
+            department=self.department,
+            role=self.nurse_role
+        )
+
+        response = self.client.patch(
+            self.url(
+                "membership-detail",
+                membership_id=membership.id
+            ),
+            {
+                "role": self.nurse_role.id
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+        membership.refresh_from_db()
+
+        self.assertEqual(
+            membership.role,
+            self.nurse_role
+        )
+
+        self.assertFalse(
+            AuditEvent.objects.exists()
+        )
 
     def test_deleting_membership_keeps_audit_history(self):
+
         membership = DepartmentMembership.objects.create(
-            user=self.staff, department=self.department, role=self.nurse_role
+            user=self.staff,
+            department=self.department,
+            role=self.nurse_role
         )
+
         membership_id = membership.id
+
         response = self.client.delete(
-            self.url("membership-detail", membership_id=membership_id)
+            self.url(
+                "membership-detail",
+                membership_id=membership_id
+            )
         )
+
         self.assertEqual(response.status_code, 204)
-        self.assertFalse(DepartmentMembership.objects.filter(pk=membership_id).exists())
+
+        # The department membership is deleted.
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                pk=membership_id
+            ).exists()
+        )
+
+        # The user account still exists.
+        self.assertTrue(
+            get_user_model().objects.filter(
+                pk=self.staff.id
+            ).exists()
+        )
+
+        # The audit record is preserved.
         self.assert_audit(
             "department.membership.deleted",
             membership,
@@ -828,48 +920,89 @@ class MembershipAuditIntegrationTests(AuditEndpointTestBase):
         )
 
     def test_only_administrator_cannot_be_deleted_or_logged(self):
+
         membership = DepartmentMembership.objects.create(
             user=self.staff,
             department=self.department,
             role=self.administrator_role,
         )
+
         response = self.client.delete(
-            self.url("membership-detail", membership_id=membership.id)
+            self.url(
+                "membership-detail",
+                membership_id=membership.id
+            )
         )
+
         self.assertEqual(response.status_code, 409)
-        self.assertTrue(DepartmentMembership.objects.filter(pk=membership.id).exists())
-        self.assertFalse(AuditEvent.objects.exists())
+
+        self.assertTrue(
+            DepartmentMembership.objects.filter(
+                pk=membership.id
+            ).exists()
+        )
+
+        self.assertFalse(
+            AuditEvent.objects.exists()
+        )
 
     def test_cannot_add_membership_in_inactive_department(self):
+
         self.department.is_active = False
-        self.department.save(update_fields=["is_active"])
+
+        self.department.save(
+            update_fields=["is_active"]
+        )
+
         response = self.client.post(
             self.url("membership-list-create"),
             {
                 "user": self.staff.id,
                 "department": self.department.id,
-                "role": self.nurse_role.id,
             },
             format="json",
         )
+
         self.assertEqual(response.status_code, 409)
-        self.assertFalse(DepartmentMembership.objects.filter(user=self.staff).exists())
-        self.assertFalse(AuditEvent.objects.exists())
+
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.staff,
+                department=self.department,
+            ).exists()
+        )
+
+        self.assertFalse(
+            AuditEvent.objects.exists()
+        )
 
     def test_non_administrator_cannot_add_membership_or_log(self):
-        self.client.force_authenticate(user=self.staff)
+
+        self.client.force_authenticate(
+            user=self.staff
+        )
+
         response = self.client.post(
             self.url("membership-list-create"),
             {
                 "user": self.second_staff.id,
                 "department": self.department.id,
-                "role": self.nurse_role.id,
             },
             format="json",
         )
-        self.assertEqual(response.status_code, 403)
-        self.assertFalse(AuditEvent.objects.exists())
 
+        self.assertEqual(response.status_code, 403)
+
+        self.assertFalse(
+            DepartmentMembership.objects.filter(
+                user=self.second_staff,
+                department=self.department,
+            ).exists()
+        )
+
+        self.assertFalse(
+            AuditEvent.objects.exists()
+        )
 
 class AdministratorTransferAuditIntegrationTests(AuditEndpointTestBase):
 
@@ -886,23 +1019,51 @@ class AdministratorTransferAuditIntegrationTests(AuditEndpointTestBase):
         )
 
     def test_transferring_to_existing_member_records_audit(self):
+
         existing = DepartmentMembership.objects.create(
             user=self.second_staff,
             department=self.department,
             role=self.nurse_role,
         )
+
         response = self.client.post(
             self.transfer_url,
             {"new_administrator": self.second_staff.id},
             format="json",
         )
+
         self.assertEqual(response.status_code, 200)
+
+        # The successor becomes Administrator.
         existing.refresh_from_db()
-        self.assertEqual(existing.role_id, self.administrator_role.id)
-        self.assertFalse(
-            DepartmentMembership.objects.filter(pk=self.current_membership.id).exists()
+
+        self.assertEqual(
+            existing.role,
+            self.administrator_role,
         )
-        self.assertTrue(get_user_model().objects.filter(pk=self.staff.id).exists())
+
+        # The previous Administrator keeps their membership.
+        self.current_membership.refresh_from_db()
+
+        self.assertEqual(
+            self.current_membership.role,
+            self.nurse_role,
+        )
+
+        self.assertTrue(
+            get_user_model().objects.filter(
+                pk=self.staff.id
+            ).exists()
+        )
+
+        self.assertEqual(
+            DepartmentMembership.objects.filter(
+                department=self.department,
+                role=self.administrator_role,
+            ).count(),
+            1,
+        )
+
         self.assert_audit(
             "department.administrator.transferred",
             self.department,
@@ -912,21 +1073,44 @@ class AdministratorTransferAuditIntegrationTests(AuditEndpointTestBase):
                 "previous_membership_id": self.current_membership.id,
                 "new_membership_id": existing.id,
                 "new_administrator_was_member": True,
+                "previous_administrator_remained_member": True,
+                "previous_restored_role_id": self.nurse_role.id,
             },
         )
 
     def test_transferring_to_new_member_records_audit(self):
+
         response = self.client.post(
             self.transfer_url,
             {"new_administrator": self.second_staff.id},
             format="json",
         )
+
         self.assertEqual(response.status_code, 200)
+
+        # A new Administrator membership is created for the successor.
         new_membership = DepartmentMembership.objects.get(
             user=self.second_staff,
             department=self.department,
             role=self.administrator_role,
         )
+
+        # The previous Administrator remains a member as Nurse.
+        self.current_membership.refresh_from_db()
+
+        self.assertEqual(
+            self.current_membership.role,
+            self.nurse_role,
+        )
+
+        self.assertEqual(
+            DepartmentMembership.objects.filter(
+                department=self.department,
+                role=self.administrator_role,
+            ).count(),
+            1,
+        )
+
         self.assert_audit(
             "department.administrator.transferred",
             self.department,
@@ -936,6 +1120,8 @@ class AdministratorTransferAuditIntegrationTests(AuditEndpointTestBase):
                 "previous_membership_id": self.current_membership.id,
                 "new_membership_id": new_membership.id,
                 "new_administrator_was_member": False,
+                "previous_administrator_remained_member": True,
+                "previous_restored_role_id": self.nurse_role.id,
             },
         )
 

@@ -284,7 +284,6 @@ class DepartmentMembershipListCreateView(APIView):
 
         user = serializer.validated_data["user"]
         department = serializer.validated_data["department"]
-        role = serializer.validated_data["role"]
 
         with transaction.atomic():
 
@@ -336,6 +335,20 @@ class DepartmentMembershipListCreateView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+            if (
+                user.requested_role_id is None
+                or user.requested_role.name not in ("Nurse", "Doctor")
+            ):
+                return Response(
+                    data={
+                        "user": [
+                            "Only staff registered as a Nurse or Doctor "
+                            "can be added to a department."
+                        ]
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
             if DepartmentMembership.objects.filter(
                 user=user,
                 department=department
@@ -350,28 +363,11 @@ class DepartmentMembershipListCreateView(APIView):
                     status=status.HTTP_409_CONFLICT
                 )
 
-            if role.name == "Administrator":
-
-                administrator_exists = DepartmentMembership.objects.filter(
-                    department=department,
-                    role__name="Administrator"
-                ).exists()
-
-                if administrator_exists:
-                    return Response(
-                        data={
-                            "message": (
-                                "This department already has "
-                                "an Administrator."
-                            )
-                        },
-                        status=status.HTTP_409_CONFLICT
-                    )
-
-            serializer.validated_data["user"] = user
-            serializer.validated_data["department"] = department
-
-            membership = serializer.save()
+            membership = serializer.save(
+                user=user,
+                department=department,
+                role=user.requested_role
+            )
 
             record_audit_event(
                 actor=request.user,
@@ -403,162 +399,6 @@ class DepartmentMembershipDetailView(APIView):
     """
 
     permission_classes = [IsApprovedUser]
-
-    def patch(self, request, membership_id):
-
-        if not request.user.is_superuser:
-
-            is_administrator = DepartmentMembership.objects.filter(
-                user=request.user,
-                role__name="Administrator",
-                department__is_active=True
-            ).exists()
-
-            if not is_administrator:
-                return Response(
-                    data={
-                        "message": "Administrator access required."
-                    },
-                    status=status.HTTP_403_FORBIDDEN
-                )
-
-        if (
-            not isinstance(request.data, dict)
-            or set(request.data.keys()) != {"role"}
-        ):
-            return Response(
-                data={
-                    "message": "Only the role field can be updated."
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        with transaction.atomic():
-
-            membership = get_object_or_404(
-                DepartmentMembership,
-                id=membership_id
-            )
-
-            department = get_object_or_404(
-                Department.objects.select_for_update(),
-                id=membership.department_id
-            )
-
-            if not department.is_active:
-                return Response(
-                    data={
-                        "message": (
-                            "Cannot modify memberships "
-                            "of an inactive department."
-                        )
-                    },
-                    status=status.HTTP_409_CONFLICT
-                )
-
-            membership = get_object_or_404(
-                DepartmentMembership.objects.select_for_update(),
-                id=membership_id,
-                department=department
-            )
-
-            if not request.user.is_superuser:
-
-                if not can_manage_department(
-                    request.user,
-                    membership.department_id
-                ):
-                    return Response(
-                        data={
-                            "message": (
-                                "You cannot modify memberships "
-                                "in this department."
-                            )
-                        },
-                        status=status.HTTP_403_FORBIDDEN
-                    )
-
-            serializer = DepartmentMembershipSerializer(
-                membership,
-                data=request.data,
-                partial=True
-            )
-
-            serializer.is_valid(raise_exception=True)
-
-            new_role = serializer.validated_data["role"]
-            current_role = membership.role
-
-            if (
-                current_role.name == "Administrator"
-                and new_role.name != "Administrator"
-            ):
-
-                another_administrator_exists = (
-                    DepartmentMembership.objects.filter(
-                        department=department,
-                        role__name="Administrator"
-                    ).exclude(
-                        id=membership.id
-                    ).exists()
-                )
-
-                if not another_administrator_exists:
-                    return Response(
-                        data={
-                            "message": (
-                                "Cannot remove the department's "
-                                "only Administrator."
-                            )
-                        },
-                        status=status.HTTP_409_CONFLICT
-                    )
-
-            if (
-                current_role.name != "Administrator"
-                and new_role.name == "Administrator"
-            ):
-
-                administrator_exists = (
-                    DepartmentMembership.objects.filter(
-                        department=department,
-                        role__name="Administrator"
-                    ).exists()
-                )
-
-                if administrator_exists:
-                    return Response(
-                        data={
-                            "message": (
-                                "This department already has "
-                                "an Administrator."
-                            )
-                        },
-                        status=status.HTTP_409_CONFLICT
-                    )
-
-            if current_role.id != new_role.id:
-
-                serializer.save()
-
-                record_audit_event(
-                    actor=request.user,
-                    action="department.membership.role_updated",
-                    target=membership,
-                    metadata={
-                        "user_id": membership.user_id,
-                        "department_id": membership.department_id,
-                        "previous_role_id": current_role.id,
-                        "previous_role_name": current_role.name,
-                        "new_role_id": new_role.id,
-                        "new_role_name": new_role.name,
-                    }
-                )
-
-        return Response(
-            serializer.data,
-            status=status.HTTP_200_OK
-        )
 
     def delete(self, request, membership_id):
 
@@ -687,8 +527,11 @@ class TransferDepartmentAdministratorView(APIView):
     Only the superuser or the current Department Administrator
     can perform this operation.
 
-    The previous Administrator's membership is deleted,
-    but their user account is preserved.
+    The previous Administrator keeps their department membership
+    and returns to their original Nurse or Doctor role.
+
+    A superuser without a clinical profession has their temporary
+    department membership removed.
 
     Successful transfers are recorded in the audit trail.
     """
@@ -760,6 +603,24 @@ class TransferDepartmentAdministratorView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+            if (
+                not new_administrator.is_superuser
+                and (
+                    new_administrator.requested_role_id is None
+                    or new_administrator.requested_role.name
+                    not in ("Nurse", "Doctor")
+                )
+            ):
+                return Response(
+                    data={
+                        "message": (
+                            "A staff Administrator must have "
+                            "a registered Nurse or Doctor profession."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
             administrator_role = Role.objects.get(
                 name="Administrator"
             )
@@ -809,7 +670,39 @@ class TransferDepartmentAdministratorView(APIView):
                 new_membership is not None
             )
 
-            current_membership.delete()
+            previous_administrator = current_membership.user
+
+            previous_profession = previous_administrator.requested_role
+
+            previous_administrator_remained_member = (
+                previous_profession is not None
+                and previous_profession.name in ("Nurse", "Doctor")
+            )
+
+            if previous_administrator_remained_member:
+
+                current_membership.role = previous_profession
+
+                current_membership.save(
+                    update_fields=["role"]
+                )
+
+            elif previous_administrator.is_superuser:
+
+                current_membership.delete()
+
+            else:
+
+                return Response(
+                    data={
+                        "message": (
+                            "Cannot restore the previous Administrator's "
+                            "clinical role. Assign their Nurse or Doctor "
+                            "profession before transferring."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
 
             if new_membership is None:
 
@@ -838,6 +731,14 @@ class TransferDepartmentAdministratorView(APIView):
                     "new_membership_id": new_membership.id,
                     "new_administrator_was_member": (
                         new_administrator_was_member
+                    ),
+                    "previous_administrator_remained_member": (
+                        previous_administrator_remained_member
+                    ),
+                    "previous_restored_role_id": (
+                        previous_profession.id
+                        if previous_administrator_remained_member
+                        else None
                     ),
                 }
             )
