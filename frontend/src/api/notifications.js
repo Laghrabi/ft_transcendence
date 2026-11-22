@@ -8,9 +8,6 @@ async function readResponse(response) {
 
 export async function getNotifications() {
   const response = await fetch("/api/notifications/");
-
   const data = await readResponse(response);
-
   return data;
 } 
-

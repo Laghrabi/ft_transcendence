@@ -7,11 +7,12 @@ export default function Dashboard() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState([]);
 
+
   useEffect(() => {
     async function loadNotifications() {
       try {
         const data = await getNotifications();
-        setNotifications(data);
+        setNotifications(data.notifications);
       }
       catch (error) {
         console.error("Error fetching notifications:", error);
