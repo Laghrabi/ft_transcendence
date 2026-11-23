@@ -23,9 +23,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /install /usr/local
 
+RUN mkdir -p /app && chown -R appuser:appgroup /app
+
 WORKDIR /app
 
-COPY . .
+COPY --chown=appuser:appgroup . .
 
 RUN chmod +x entrypoint.sh
 

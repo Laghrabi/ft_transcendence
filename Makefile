@@ -1,14 +1,15 @@
-COMPOSE  = docker compose
-ENV_FILE = .env
+COMPOSE		= docker compose
+ENV_FILE	= .env
 
-GREEN  = \033[0;32m
-RED    = \033[0;31m
-YELLOW = \033[0;33m
-CYAN   = \033[0;36m
-RESET  = \033[0m
+GREEN		= \033[0;32m
+RED			= \033[0;31m
+YELLOW		= \033[0;33m
+CYAN		= \033[0;36m
+RESET		= \033[0m
 
+SSL			= ./infra/scripts/generate-ssl.sh
 
-up: env-check
+up: env-check ssl
 	@echo "$(GREEN)Starting CareFlow...$(RESET)"
 	$(COMPOSE) up --build -d
 	@echo "$(GREEN)CareFlow is running!$(RESET)"
@@ -24,6 +25,16 @@ build:
 
 logs:
 	$(COMPOSE) logs -f
+
+env-check:
+	@if [ ! -f $(ENV_FILE) ]; then \
+		echo "$(YELLOW)No $(ENV_FILE) found. Creating from .env.example...$(RESET)"; \
+		cp .env.example $(ENV_FILE); \
+	fi
+
+ssl:
+	@chmod +x $(SSL)
+	@$(SSL)
 
 restart:
 	$(COMPOSE) restart
@@ -43,4 +54,4 @@ fclean: clean
 
 re: fclean up
 
-.PHONY: up down build logs restart status clean fclean re env-check
+.PHONY: up down build logs restart status clean fclean re env-check ssl
