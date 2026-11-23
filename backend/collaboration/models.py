@@ -1,16 +1,17 @@
 from django.db import models
 from  django.conf import settings
+# from .models import Case
 
 
 
 # temporary class of case for testing purposes, will be replaced with the real one later :)
 
-class Case(models.Model):
-    title = models.CharField(max_length=200)
-    members = models.ManyToManyField(
-        settings.AUTH_USER_MODEL,
-        blank=True
-    )
+# class Case(models.Model):
+#     title = models.CharField(max_length=200)
+#     members = models.ManyToManyField(
+#         settings.AUTH_USER_MODEL,
+#         blank=True
+#     )
 
 
 class Comment(models.Model):
@@ -20,7 +21,7 @@ class Comment(models.Model):
         null=True
     )
     case = models.ForeignKey(
-        Case,
+        "workflow.Case",
         on_delete = models.PROTECT
     )
     content = models.TextField()

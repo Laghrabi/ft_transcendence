@@ -3,11 +3,10 @@ from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework import status
-from .models import Case, Comment
+from .models import  Comment, Notification
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework.test import APITestCase
-from .models import Notification
 from django.test import TestCase
 from collaboration.services.notifications import create_notification
 from collaboration.services.events import handle_event
@@ -20,6 +19,7 @@ import json
 from asgiref.sync import async_to_sync
 from asgiref.sync import sync_to_async
 from django.db import transaction
+from workflow.models import Case
 
 
 # class CommentAPITests(APITestCase):
@@ -388,7 +388,8 @@ class EventHandlerTests(TestCase):
     def test_create_notification(self):
         User = get_user_model()
         user = User.objects.create_user(
-            username="salma",
+            email="mam@example.com",
+            name="mam",
             password="test_password_123!"
         )
         with self.assertRaises(ValueError):
@@ -419,11 +420,13 @@ class NotificationConsumerTests(TestCase):
     def setUp(self):
         User = get_user_model()
         self.sara = User.objects.create_user(
-            username="salma",
+            email="salma@example.com",
+            name="Salma",
             password="test_password_123!"
         )
         self.hamza = User.objects.create_user(
-            username="hamza",
+            email="hamza@example.com",
+            name="hamza",
             password="test_password_123!"
         )
     def create_and_broadcast(self):
