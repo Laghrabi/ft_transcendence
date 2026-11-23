@@ -19,7 +19,7 @@ services:
       resources:
         limits:
           memory: 256M
-          # cpus: "0.50"
+          cpus: "0.50"
 
   redis:
     image: redis:7-alpine
@@ -40,7 +40,7 @@ services:
       resources:
         limits:
           memory: 128M
-          # cpus: "0.25"
+          cpus: "0.25"
 
   backend:
     build:
@@ -64,7 +64,7 @@ services:
       resources:
         limits:
           memory: 512M
-          #cpus: "0.75"
+          cpus: "0.75"
 
   nginx:
     build:
@@ -73,7 +73,8 @@ services:
     container_name: careflow_nginx
     restart: unless-stopped
     ports:
-      - "8080:80"
+      - "80:80"
+      - "443:443"
     volumes:
       - ./infra/nginx/conf.d:/etc/nginx/conf.d:ro
       - ./infra/nginx/ssl:/etc/nginx/ssl:ro
@@ -87,7 +88,7 @@ services:
       resources:
         limits:
           memory: 128M
-          #cpus: "0.25"
+          cpus: "0.25"
 
 volumes:
   postgres_data:
