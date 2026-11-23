@@ -1,38 +1,158 @@
-body {
-    margin: 0;
-    background: #f7f4ef;
-    color: #303832;
-    font-family: Georgia, "Times New Roman", serif;
+
+/* OUTER PAGE */
+.privacy-screen {
+    min-height: 100vh; /* At least full screen height */
+    width: 100%; /* Full available width */
+    box-sizing: border-box; /* Keep padding inside width */
+    padding: 40px 20px; /* Inside space: top/bottom, left/right */
+    background: #f7f4ef; /* Cream background */
+    color: #303832; /* Text color */
+    font-family: Georgia, "Times New Roman", serif; /* Text font */
 }
 
+/* MAIN WHITE CARD */
+.privacy-page {
+    display: flex; /* Arrange child elements */
+    flex-direction: column; /* Put children top to bottom */
+    width: min(100%, 1000px); /* Full width, maximum 1000px */
+    box-sizing: border-box; /* Include padding in width */
+    margin: 0 auto; /* Center the card horizontally */
+    padding: 40px; /* Space inside the card */
+    gap: 24px; /* Space between children */
+    border-radius: 28px; /* Round the corners */
+    background: #fff; /* White background */
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.05); /* Soft shadow */
+}
+
+/* PAGE HEADER */
+.privacy-header {
+    display: flex; /* Arrange children with Flexbox */
+    flex-direction: column; /* Put children vertically */
+    gap: 12px; /* Space between children */
+}
+
+.privacy-header h1 {
+    color: #4c8060; /* Green heading */
+    font-size: 36px; /* Text size */
+    margin: 0; /* Remove outside space */
+}
+
+.privacy-header p {
+    margin: 0; /* Remove outside space */
+    line-height: 1.7; /* Space between text lines */
+}
+
+.privacy-date {
+    color: #777; /* Gray text */
+    font-size: 14px; /* Small text */
+}
+
+/* BACK TO LOGIN LINK */
+.privacy-back-link {
+    display: inline-block; /* Link behaves like a small box */
+    align-self: flex-start; /* Keep link on the left */
+    margin-top: 10px; /* Space above the link */
+    padding: 12px 20px; /* Space inside the link */
+    border-radius: 10px; /* Round corners */
+    background: #4c8060; /* Green background */
+    color: #fff; /* White text */
+    text-decoration: none; /* Remove underline */
+    font-weight: bold; /* Bold text */
+    transition: background 0.2s ease; /* Change color smoothly */
+}
+
+.privacy-back-link:hover {
+    background: #396449; /* Darker green on mouse hover */
+}
+
+/* PRIVACY SECTIONS */
 .privacy-section {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    padding: 20px;
-    border-radius: 18px;
-    background:#f7f4ef;
-    box-sizing: border-box;
+    display: flex; /* Arrange child elements */
+    flex-direction: column; /* Put children vertically */
+    width: 100%; /* Fill parent width */
+    box-sizing: border-box; /* Keep padding inside width */
+    padding: 25px; /* Space inside section */
+    border-radius: 18px; /* Round corners */
+    background: #f7f4ef; /* Cream background */
+    gap: 12px; /* Space between children */
 }
 
-.privacy-page{
-    display: flex;
-    flex-direction: column;
-    width: min(1200px, 100%);
-    padding: 20px;
-    border-radius: 18px;
-    background: #fff;
-    box-sizing: border-box;
-    margin: 0 auto;
-    gap: 20px;
-
+.privacy-section h2 {
+    color: #4c8060; /* Green heading */
+    font-size: 24px; /* Heading size */
+    margin: 0 0 8px; /* 8px space below */
 }
 
-.privacy-section h2{
-   color: #4c8060;
+.privacy-section h3 {
+    color: #303832; /* Dark text */
+    font-size: 18px; /* Smaller heading */
+    margin: 12px 0 0; /* 12px space above */
 }
 
-@media (max-width: 600px){
+.privacy-section p {
+    font-size: 16px; /* Paragraph text size */
+    line-height: 1.8; /* Space between text lines */
+    margin: 0; /* Remove outside space */
+}
 
-   .privacy-page{padding: 12px;}
+.privacy-section ul {
+    padding-left: 24px; /* Space on left for list bullets */
+    margin: 0; /* Remove outside space */
+}
+
+.privacy-section li {
+    margin-bottom: 8px; /* Space below each list item */
+    font-size: 16px; /* Text size */
+    line-height: 1.6; /* Space between text lines */
+}
+
+/* FOOTER */
+.privacy-footer {
+    display: flex; /* Arrange children horizontally */
+    justify-content: space-between; /* Put children at opposite ends */
+    align-items: center; /* Center children vertically */
+    gap: 16px; /* Space between children */
+    padding-top: 20px; /* Space inside, at top */
+    border-top: 1px solid #e5e5e5; /* Thin gray line above */
+    color: #777; /* Gray text */
+    font-size: 14px; /* Small text */
+}
+
+.privacy-footer p {
+    margin: 0; /* Remove outside space */
+}
+
+.privacy-footer a {
+    color: #4c8060; /* Green link */
+    text-decoration: none; /* Remove underline */
+}
+
+/* MOBILE SCREEN: 600px OR SMALLER */
+@media (max-width: 600px) {
+    .privacy-screen {
+        padding: 16px 10px; /* Less space on small screens */
+    }
+
+    .privacy-page {
+        padding: 20px 14px; /* Less space inside card */
+        gap: 18px; /* Smaller space between children */
+        border-radius: 16px; /* Smaller rounded corners */
+    }
+
+    .privacy-header h1 {
+        font-size: 27px; /* Smaller main heading */
+    }
+
+    .privacy-section {
+        padding: 16px; /* Less space inside sections */
+    }
+
+    .privacy-section h2 {
+        font-size: 20px; /* Smaller section headings */
+    }
+
+    .privacy-footer {
+        flex-direction: column; /* Put children top to bottom */
+        align-items: flex-start; /* Align children to the left */
+    }
 }
