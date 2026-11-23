@@ -47,6 +47,8 @@ INSTALLED_APPS = [
     'django_filters',
     'drf_spectacular',
     'accounts.apps.AccountsConfig',
+    "audit.apps.AuditConfig",
+    "organizations.apps.OrganizationsConfig",
     'collaboration.apps.CollaborationConfig',
     "analytics.apps.AnalyticsConfig",
     'workflow',
@@ -88,8 +90,12 @@ ASGI_APPLICATION = "config.asgi.application"
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.environ["POSTGRES_DB"],
+        'USER': os.environ["POSTGRES_USER"],
+        'PASSWORD': os.environ["POSTGRES_PASSWORD"],
+        'HOST': os.environ["DB_HOST"],
+        'PORT': os.environ["DB_PORT"],
     }
 }
 
@@ -164,3 +170,4 @@ REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
 }
+AUTH_USER_MODEL = "accounts.User"
