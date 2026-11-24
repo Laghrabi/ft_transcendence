@@ -64,13 +64,13 @@ async function postAuth(endpoint, body) {
   return readResponse(response);
 }
 
-export function registerUser(name, email, password, role, department) {
+export function registerUser(name, email, password, roleId, departmentId) {
   return postAuth("/api/auth/register/", {
     name,
     email,
     password,
-    requested_role: role,
-    requested_department: department,
+    requested_role: roleId,
+    requested_department: departmentId,
   });
 }
 
@@ -91,6 +91,14 @@ export async function getCurrentUser() {
 
 export async function getDepartments() {
   const response = await authFetch("/api/auth/departments/", {
+    credentials: "include",
+  });
+
+  return readResponse(response);
+}
+
+export async function getRoles() {
+  const response = await authFetch("/api/auth/roles/", {
     credentials: "include",
   });
 
