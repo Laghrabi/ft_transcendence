@@ -10,8 +10,10 @@ class AnalyticsAPITests(APITestCase):
     def setUp(self):
         User = get_user_model()
         self.user = User.objects.create_user(
-            username="analytics_test",
-            password="test_password_123!"
+            email="salma@example.com",
+            name="Salma",
+            password="test_password_123!",
+            is_active=True
         )
 
         self.client.force_authenticate(user=self.user)
@@ -56,8 +58,10 @@ class AnalyticsExportAPITests(APITestCase):
         User = get_user_model()
 
         self.user = User.objects.create_user(
-            username="analytics_export_test",
-            password="test_password_123!"
+            email="analytic@example.com",
+            name="analytic",
+            password="test_password_123!",
+            is_active=True
         )
 
         self.client.force_authenticate(user=self.user)
