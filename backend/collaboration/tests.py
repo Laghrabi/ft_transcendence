@@ -20,6 +20,8 @@ from asgiref.sync import async_to_sync
 from asgiref.sync import sync_to_async
 from django.db import transaction
 from workflow.models import Case
+from django.test import TransactionTestCase
+from channels.db import database_sync_to_async
 
 
 # class CommentAPITests(APITestCase):
@@ -406,7 +408,7 @@ class EventHandlerTests(TestCase):
 
 
 
-class NotificationConsumerTests(TestCase):
+class NotificationConsumerTests(TransactionTestCase):
 
     async def test_anonymous_connection_rejected(self):
         communicator = WebsocketCommunicator(NotificationConsumer.as_asgi(),"/ws/notifications/")
@@ -430,12 +432,10 @@ class NotificationConsumerTests(TestCase):
             password="test_password_123!"
         )
     def create_and_broadcast(self):
-            with self.captureOnCommitCallbacks(execute=True):
-                notification = create_notification(
-                    recipient=self.sara,
-                    message="Task 12 was assigned to you"
-                )
-            return notification
+        return create_notification(
+        recipient=self.sara,
+        message="Task 12 was assigned to you"
+    )
     async def test_realtime_notification_is_private(self):
         com = WebsocketCommunicator(
             NotificationConsumer.as_asgi(),
@@ -455,7 +455,7 @@ class NotificationConsumerTests(TestCase):
     
         try:
             # Create a database notification and broadcast it through Redis
-            notification = await sync_to_async(self.create_and_broadcast)()
+            notification = await database_sync_to_async(self.create_and_broadcast)()
     
             # Receive the message sent by the Consumer
             response = await com.receive_from(timeout=2)
@@ -472,6 +472,19 @@ class NotificationConsumerTests(TestCase):
             if connected_hamza:
                 await com_hamza.disconnect()
         # async def test_realtime_notification_received(self):
+
+
+
+
+class NotificationRollbackTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.sara = User.objects.create_user(
+            email="salma@example.com",
+            name="Salma",
+            password="test_password_123!"
+        )
+
     def test_rollback_does_not_broadcast(self):
         message = "ROLLBACK_TEST_001"
 
@@ -490,10 +503,6 @@ class NotificationConsumerTests(TestCase):
         )
 
         self.assertEqual(len(callbacks), 0)    
-
-
-
-
 
     
 
