@@ -39,11 +39,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: "0.50"
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
@@ -59,11 +55,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-          cpus: "0.25"
+      start_period: 5s
 
   backend:
     build:
@@ -88,11 +80,6 @@ services:
     networks:
       - data-net
       - app-net
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: "0.75"
 
   nginx:
     build:

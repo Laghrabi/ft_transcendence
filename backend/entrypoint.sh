@@ -16,6 +16,12 @@ for k, v in data.items():
 ')"
 
 python manage.py migrate --noinput
+
+if [ "${SEED_DEV_DATA:-false}" = "true" ]; then
+    python manage.py seed_dev_data --confirm-local --with-staff
+fi
+
+# Collect static files into shared volume
 python manage.py collectstatic --noinput 2>/dev/null || true
 
 exec daphne -b 0.0.0.0 -p 8000 "${DJANGO_ASGI_APP:-config.asgi:application}"

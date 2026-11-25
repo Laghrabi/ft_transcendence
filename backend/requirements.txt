@@ -3,3 +3,5 @@ djangorestframework==3.18.3
 psycopg[binary]==3.3.6
 python-dotenv
 daphne
+django-filter==26.1
+drf-spectacular==0.30.0

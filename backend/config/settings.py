@@ -43,10 +43,13 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'django_filters',
+    'drf_spectacular',
     'accounts.apps.AccountsConfig',
     "audit.apps.AuditConfig",
     "organizations.apps.OrganizationsConfig",
     'collaboration.apps.CollaborationConfig',
+    'workflow',
 ]
 
 MIDDLEWARE = [
@@ -136,3 +139,19 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTH_USER_MODEL = "accounts.User"
+
+if DEBUG:
+    CSRF_TRUSTED_ORIGINS = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+
+REST_FRAMEWORK = {
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.OrderingFilter',
+    ],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,
+}
