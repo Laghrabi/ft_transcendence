@@ -112,7 +112,7 @@ services:
       - monitoring-net
 
   grafana:
-    image: grafana/grafana:10.4.0
+    image: grafana/grafana:13.3.2
     container_name: careflow_grafana
     restart: unless-stopped
     env_file:
@@ -131,7 +131,7 @@ services:
       - monitoring-net
 
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:latest
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: careflow_cadvisor
     restart: unless-stopped
     privileged: true

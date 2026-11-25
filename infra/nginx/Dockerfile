@@ -1,4 +1,4 @@
-FROM owasp/modsecurity-crs:nginx-alpine
+FROM owasp/modsecurity-crs:4.25.2-nginx-alpine-202611190211-lts	
 
 USER root
 RUN rm -f /docker-entrypoint.d/01-check-low-port.sh
