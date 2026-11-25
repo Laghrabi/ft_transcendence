@@ -24,6 +24,8 @@ from .serializers import (
     RoleSerializer,
     TransferDepartmentAdministratorSerializer,
 )
+from django.db.models import Q
+from workflow.models import Case, Task
 
 
 @method_decorator(csrf_protect, name="dispatch")
@@ -485,6 +487,18 @@ class DepartmentMembershipDetailView(APIView):
                         status=status.HTTP_409_CONFLICT
                     )
 
+            if _membership_has_unfinished_tasks(membership):
+                return Response(
+                    data={
+                        "message": (
+                            "Cannot remove this department membership "
+                            "while the staff member has unfinished task "
+                            "responsibilities in this department."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
             record_audit_event(
                 actor=request.user,
                 action="department.membership.deleted",
@@ -689,6 +703,18 @@ class TransferDepartmentAdministratorView(APIView):
 
             elif previous_administrator.is_superuser:
 
+                if _membership_has_unfinished_tasks(current_membership):
+                    return Response(
+                        data={
+                            "message": (
+                                "Cannot remove the previous Administrator's "
+                                "membership while they have unfinished "
+                                "task responsibilities in this department."
+                            )
+                        },
+                        status=status.HTTP_409_CONFLICT
+                    )
+
                 current_membership.delete()
 
             else:
@@ -787,6 +813,34 @@ class DeactivateDepartmentView(APIView):
                 return Response(
                     data={
                         "message": "This department is already inactive."
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            open_cases = Case.objects.filter(
+                lead_department=department,
+                status=Case.Status.OPEN,
+            )
+
+            open_case_count = open_cases.count()
+
+            unfinished_tasks = Task.objects.filter(
+                Q(assigned_department=department)
+                | Q(case__lead_department=department),
+                status__in=Task.ACTIVE_STATUSES,
+            )
+
+            unfinished_task_count = unfinished_tasks.count()
+
+            if open_case_count > 0 or unfinished_task_count > 0:
+                return Response(
+                    data={
+                        "message": (
+                            "Cannot deactivate a department with open "
+                            "cases or unfinished tasks."
+                        ),
+                        "open_case_count": open_case_count,
+                        "unfinished_task_count": unfinished_task_count,
                     },
                     status=status.HTTP_409_CONFLICT
                 )
@@ -981,3 +1035,21 @@ class UpdateDepartmentTaskAcceptanceView(APIView):
             data=serializer.data,
             status=status.HTTP_200_OK
         )
+
+def _membership_has_unfinished_tasks(membership):
+    """
+    Check whether removing a department membership
+    would affect unfinished task ownership.
+    """
+
+    return Task.objects.filter(
+        Q(
+            current_assignee_id=membership.user_id,
+            assigned_department_id=membership.department_id,
+        )
+        | Q(
+            original_assigner_id=membership.user_id,
+            case__lead_department_id=membership.department_id,
+        ),
+        status__in=Task.ACTIVE_STATUSES,
+    ).exists()
