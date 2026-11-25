@@ -112,7 +112,7 @@ services:
       - monitoring-net
 
   grafana:
-    image: grafana/grafana:13.3.2
+    image: grafana/grafana:13.3.2-slim
     container_name: careflow_grafana
     restart: unless-stopped
     env_file:
@@ -122,6 +122,7 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD}"
       GF_SERVER_ROOT_URL: "https://localhost/grafana/"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - ./infra/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana_data:/var/lib/grafana
