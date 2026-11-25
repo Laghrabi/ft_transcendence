@@ -900,6 +900,8 @@ class PendingRegistrationsTests(TestCase):
             "id",
             "name",
             "email",
+            "avatar",
+            "date_joined",
             "approval_status",
             "requested_department",
             "requested_department_name",
@@ -4063,6 +4065,10 @@ class StaffListTests(APITestCase):
                 "avatar",
                 "status",
                 "is_active",
+                "profession",
+                "is_department_admin",
+                "can_activate",
+                "can_deactivate",
             },
         )
 

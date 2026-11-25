@@ -2,7 +2,11 @@ from rest_framework import serializers
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import User
-from organizations.models import Department, Role
+from organizations.models import (
+    Department,
+    Role,
+    DepartmentMembership,
+)
 from organizations.serializers import (
     DepartmentSerializer,
     DepartmentCreateSerializer,
@@ -12,6 +16,28 @@ from organizations.serializers import (
     TransferDepartmentAdministratorSerializer,
 )
 
+
+def _has_active_admin_role(user):
+    """
+    Check whether the staff member holds an Administrator
+    role in at least one active department.
+    """
+
+    memberships = list(user.departmentmembership_set.all())
+    index = 0
+
+    while index < len(memberships):
+        membership = memberships[index]
+
+        if (
+            membership.role.name == "Administrator"
+            and membership.department.is_active
+        ):
+            return True
+
+        index += 1
+
+    return False
 
 class RegisterSerializer(serializers.ModelSerializer):
     requested_department = serializers.PrimaryKeyRelatedField(
@@ -103,6 +129,8 @@ class PendingRegistrationSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "email",
+            "avatar",
+            "date_joined",
             "approval_status",
             "requested_department",
             "requested_department_name",
@@ -155,6 +183,72 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
         return data
 
+class DepartmentMembershipSummarySerializer(
+    serializers.ModelSerializer
+):
+    department_id = serializers.IntegerField(read_only=True)
+
+    department_name = serializers.CharField(
+        source="department.name",
+        read_only=True,
+    )
+
+    department_is_active = serializers.BooleanField(
+        source="department.is_active",
+        read_only=True,
+    )
+
+    role_id = serializers.IntegerField(read_only=True)
+
+    role_name = serializers.CharField(
+        source="role.name",
+        read_only=True,
+    )
+
+    class Meta:
+        model = DepartmentMembership
+        fields = [
+            "department_id",
+            "department_name",
+            "department_is_active",
+            "role_id",
+            "role_name",
+        ]
+        read_only_fields = fields
+
+class StaffDetailsSerializer(UserProfileSerializer):
+    profession = serializers.CharField(
+        source="requested_role.name",
+        read_only=True,
+        allow_null=True,
+    )
+
+    is_department_admin = serializers.SerializerMethodField()
+
+    department_memberships = DepartmentMembershipSummarySerializer(
+        source="departmentmembership_set",
+        many=True,
+        read_only=True,
+    )
+
+    class Meta(UserProfileSerializer.Meta):
+        fields = UserProfileSerializer.Meta.fields + [
+            "is_active",
+            "profession",
+            "is_department_admin",
+            "department_memberships",
+        ]
+        read_only_fields = fields
+
+    def get_is_department_admin(self, obj):
+        return _has_active_admin_role(obj)
+
+class CurrentUserSerializer(StaffDetailsSerializer):
+    class Meta(StaffDetailsSerializer.Meta):
+        fields = StaffDetailsSerializer.Meta.fields + [
+            "is_superuser",
+        ]
+        read_only_fields = fields
 
 class UpdateProfileSerializer(serializers.ModelSerializer):
     class Meta:
@@ -187,7 +281,26 @@ class StaffListSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 class AdminStaffListSerializer(serializers.ModelSerializer):
+    """
+    Serialize staff information for the administrative Users directory.
+
+    Include the staff member's registered profession, department
+    administrator status, and available activation or deactivation
+    actions based on the requesting administrator's permissions.
     
+    All fields are read-only.
+    """
+
+    profession = serializers.CharField(
+        source="requested_role.name",
+        read_only=True,
+        allow_null=True,
+    )
+
+    is_department_admin = serializers.SerializerMethodField()
+    can_activate = serializers.SerializerMethodField()
+    can_deactivate = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = [
@@ -197,5 +310,53 @@ class AdminStaffListSerializer(serializers.ModelSerializer):
             "avatar",
             "status",
             "is_active",
+            "profession",
+            "is_department_admin",
+            "can_activate",
+            "can_deactivate",
         ]
         read_only_fields = fields
+
+    def get_is_department_admin(self, obj):
+        return _has_active_admin_role(obj)
+
+    def get_can_activate(self, obj):
+        return (
+            self.context.get("admin_directory_access", False)
+            and obj.approval_status == "approved"
+            and not obj.is_active
+        )
+
+    def get_can_deactivate(self, obj):
+        request = self.context.get("request")
+
+        if (
+            request is None
+            or not self.context.get("admin_directory_access", False)
+            or not obj.is_active
+            or obj.approval_status != "approved"
+            or request.user.pk == obj.pk
+        ):
+            return False
+
+        managed_departments = self.context.get(
+            "managed_department_ids",
+            set()
+        )
+
+        allowed = request.user.is_superuser
+        memberships = list(obj.departmentmembership_set.all())
+        index = 0
+
+        while index < len(memberships):
+            membership = memberships[index]
+
+            if membership.role.name == "Administrator":
+                return False
+
+            if membership.department_id in managed_departments:
+                allowed = True
+
+            index += 1
+
+        return allowed

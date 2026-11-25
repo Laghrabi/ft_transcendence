@@ -61,6 +61,25 @@ def can_manage_department(user, department_id):
         role__name="Administrator",
     ).exists()
 
+def can_view_inactive_staff(user):
+    """
+    Check whether a user can view approved inactive staff.
+
+    Superusers and Administrators of active departments
+    can access inactive staff across all departments.
+    """
+
+    if not is_active_approved_user(user):
+        return False
+
+    if user.is_superuser:
+        return True
+
+    return DepartmentMembership.objects.filter(
+        user=user,
+        role__name="Administrator",
+        department__is_active=True,
+    ).exists()
 
 def can_participate_in_tasks(user):
     """
