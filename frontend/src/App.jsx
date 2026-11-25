@@ -4,6 +4,7 @@ import Register from "./pages/auth/Register.jsx";
 import PrivacyPolicy from "./pages/legal/PrivacyPolicy.jsx";
 
 
+import Dashboard from "./pages/dashboard/Dashboard.jsx";
 
 function App() {
   return (
@@ -14,6 +15,7 @@ function App() {
         <Route path="/register" element={<Register />} />
         <Route path="/privacy" element={<PrivacyPolicy />} />
 
+        <Route path="/dashboard" element={<Dashboard />} />
       </Routes>
     </BrowserRouter>
   );

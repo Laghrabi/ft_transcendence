@@ -54,12 +54,6 @@ class Case(models.Model):
         related_name="created_cases"
     )
 
-    members = models.ManyToManyField(
-        settings.AUTH_USER_MODEL,
-        related_name="participating_cases",
-        blank=True
-    )
-
     closed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,

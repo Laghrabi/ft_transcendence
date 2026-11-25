@@ -1,7 +1,7 @@
 
 import "../../styles/Login.css";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { loginUser, getCurrentUser } from "../../api/auth";
 
 function LeftPanel() {
@@ -73,28 +73,26 @@ function LeftPanel() {
 }
 
 function RightPanel() {
+  const navigate = useNavigate();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
 
   async function handleSubmit(event) {
     event.preventDefault();
     if (loading) return;
 
     setError("");
-    setSuccess("");
     setLoading(true);
 
     try {
       await loginUser(email.trim(), password);
 
-      const user = await getCurrentUser();
+      await getCurrentUser();
 
-      setSuccess(
-        `Welcome, ${user.name || email}! You are successfully logged in.`
-      );
+      navigate("/dashboard", { replace: true });
     } catch (err) {
       setError(err.message || "Login failed. Please try again.");
     } finally {
@@ -157,12 +155,6 @@ function RightPanel() {
           {error && (
             <p className="login-error" role="alert">
               {error}
-            </p>
-          )}
-
-          {success && (
-            <p className="login-success" role="status">
-              {success}
             </p>
           )}
         </form>

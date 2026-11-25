@@ -1,7 +1,7 @@
 
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { registerUser, getDepartments } from "../../api/auth";
+import { registerUser, getDepartments, getRoles } from "../../api/auth";
 import "../../styles/Register.css";
 
 function RegisterLeftPanel() {
@@ -59,9 +59,31 @@ function RegisterRightPanel() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
+  const [roles, setRoles] = useState([]);
+  const [rolesLoading, setRolesLoading] = useState(true);
+  const [rolesError, setRolesError] = useState(false);
+
   const [departments, setDepartments] = useState([]);
   const [departmentsLoading, setDepartmentsLoading] = useState(true);
   const [departmentsError, setDepartmentsError] = useState(false);
+
+  useEffect(() => {
+    async function loadRoles() {
+      try {
+        const data = await getRoles();
+        if (!Array.isArray(data)) {
+          throw new Error("Expected a list of roles.");
+        }
+        setRoles(data);
+      } catch {
+        setRolesError(true);
+      } finally {
+        setRolesLoading(false);
+      }
+    }
+
+    loadRoles();
+  }, []);
 
   useEffect(() => {
     async function loadDepartments() {
@@ -91,16 +113,14 @@ function RegisterRightPanel() {
   const hasLength = password.length >= 8;
   const hasNumber = /\d/.test(password);
   const hasSymbol = /[^a-zA-Z0-9\s]/.test(password);
+  const rolesUnavailable = rolesLoading || rolesError || roles.length === 0;
+  const departmentsUnavailable =
+    departmentsLoading || departmentsError || departments.length === 0;
 
   async function handleSubmit(event) {
     event.preventDefault();
 
-    if (
-      loading ||
-      departmentsLoading ||
-      departmentsError ||
-      departments.length === 0
-    ) {
+    if (loading || rolesUnavailable || departmentsUnavailable) {
       return;
     }
 
@@ -113,15 +133,15 @@ function RegisterRightPanel() {
     const name = formData.get("name").trim();
     const email = formData.get("email").trim();
     const confirmPassword = formData.get("confirmPassword");
-    const role = formData.get("role");
-    const department = formData.get("department");
+    const roleId = Number(formData.get("role"));
+    const departmentId = Number(formData.get("department"));
 
     if (!name) {
       setError("Please enter your full name.");
       return;
     }
 
-    if (!role || !department) {
+    if (!roleId || !departmentId) {
       setError("Please select your role and department.");
       return;
     }
@@ -143,8 +163,8 @@ function RegisterRightPanel() {
         name,
         email,
         password,
-        role,
-        department
+        roleId,
+        departmentId
       );
 
       setSuccess(
@@ -205,12 +225,22 @@ function RegisterRightPanel() {
             name="role"
             defaultValue=""
             required
+            disabled={rolesUnavailable}
           >
             <option value="" disabled>
-              Select your role
+              {rolesLoading
+                ? "Loading roles..."
+                : rolesError
+                  ? "Unable to load roles"
+                  : roles.length === 0
+                    ? "No roles available"
+                    : "Select your role"}
             </option>
-            <option value="doctor">Doctor</option>
-            <option value="nurse">Nurse</option>
+            {roles.map((role) => (
+              <option key={role.id} value={role.id}>
+                {role.name}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -222,11 +252,7 @@ function RegisterRightPanel() {
             name="department"
             defaultValue=""
             required
-            disabled={
-              departmentsLoading ||
-              departmentsError ||
-              departments.length === 0
-            }
+            disabled={departmentsUnavailable}
           >
             <option value="" disabled>
               {departmentsLoading
@@ -301,6 +327,12 @@ function RegisterRightPanel() {
           administrator must approve access before you can sign in.
         </p>
 
+        {rolesError && (
+          <p className="register-error" role="alert">
+            Unable to load roles. Please try again later.
+          </p>
+        )}
+
         {error && (
           <p className="register-error" role="alert">
             {error}
@@ -317,10 +349,7 @@ function RegisterRightPanel() {
           className="register-submit"
           type="submit"
           disabled={
-            loading ||
-            departmentsLoading ||
-            departmentsError ||
-            departments.length === 0
+            loading || rolesUnavailable || departmentsUnavailable
           }
         >
           {loading ? "Creating account..." : "Complete Registration"}
