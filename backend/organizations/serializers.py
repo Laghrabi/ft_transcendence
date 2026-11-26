@@ -9,9 +9,12 @@ from .models import (
 )
 from accounts.permissions_catalog import ALLOWED_PERMISSIONS
 
-class DepartmentSerializer(serializers.ModelSerializer):
+
+
+class PublicDepartmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Department
+
         fields = [
             "id",
             "name",
@@ -19,12 +22,57 @@ class DepartmentSerializer(serializers.ModelSerializer):
             "is_active",
             "accepts_new_tasks",
         ]
+
         read_only_fields = [
             "id",
             "is_active",
             "accepts_new_tasks",
         ]
 
+
+class DepartmentSerializer(PublicDepartmentSerializer):
+    administrator = serializers.SerializerMethodField()
+
+    class Meta(PublicDepartmentSerializer.Meta):
+        fields = PublicDepartmentSerializer.Meta.fields + [
+            "created_at",
+            "updated_at",
+            "administrator",
+        ]
+
+        read_only_fields = (
+            PublicDepartmentSerializer.Meta.read_only_fields + [
+                "created_at",
+                "updated_at",
+                "administrator",
+            ]
+        )
+
+    def get_administrator(self, obj):
+        memberships = getattr(
+            obj,
+            "administrator_memberships",
+            None,
+        )
+
+        if memberships is None:
+            membership = DepartmentMembership.objects.filter(
+                department=obj,
+                role__name="Administrator",
+            ).select_related("user").order_by("id").first()
+        elif not memberships:
+            return None
+        else:
+            membership = memberships[0]
+
+        if membership is None:
+            return None
+
+        return {
+            "id": membership.user_id,
+            "name": membership.user.name,
+            "avatar": membership.user.avatar,
+        }
 
 class DepartmentCreateSerializer(serializers.ModelSerializer):
     administrator = serializers.PrimaryKeyRelatedField(
@@ -121,12 +169,39 @@ class DepartmentCreateSerializer(serializers.ModelSerializer):
 
 class DepartmentMembershipSerializer(serializers.ModelSerializer):
     """
-    Serialize department memberships.
+    Serialize department memberships with staff identity,
+    registered profession, department role and account activity.
 
     Clinical roles are assigned automatically from the user's
-    registered profession. They cannot be selected or changed
-    through this serializer.
+    registered profession.
     """
+
+    user_name = serializers.CharField(
+        source="user.name",
+        read_only=True,
+    )
+
+    user_avatar = serializers.CharField(
+        source="user.avatar",
+        read_only=True,
+        allow_null=True,
+    )
+
+    profession = serializers.CharField(
+        source="user.requested_role.name",
+        read_only=True,
+        allow_null=True,
+    )
+
+    role_name = serializers.CharField(
+        source="role.name",
+        read_only=True,
+    )
+
+    is_active = serializers.BooleanField(
+        source="user.is_active",
+        read_only=True,
+    )
 
     class Meta:
         model = DepartmentMembership
@@ -136,9 +211,22 @@ class DepartmentMembershipSerializer(serializers.ModelSerializer):
             "user",
             "department",
             "role",
+            "user_name",
+            "user_avatar",
+            "profession",
+            "role_name",
+            "is_active",
         ]
 
-        read_only_fields = ["id", "role"]
+        read_only_fields = [
+            "id",
+            "role",
+            "user_name",
+            "user_avatar",
+            "profession",
+            "role_name",
+            "is_active",
+        ]
 
     def validate(self, attrs):
 
