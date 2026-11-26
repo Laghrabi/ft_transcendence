@@ -7,7 +7,10 @@ from organizations.models import (
     Role,
 )
 
-from accounts.permissions import can_view_inactive_staff
+from accounts.permissions import (
+    can_view_inactive_staff,
+    can_be_department_admin,
+)
 
 
 class UsersAPIAlignmentTests(APITestCase):
@@ -267,3 +270,68 @@ class UsersAPIAlignmentTests(APITestCase):
         self.assertIsNotNone(staff)
         self.assertIn("avatar", staff)
         self.assertIn("date_joined", staff)
+
+    def test_doctor_can_be_department_admin(self):
+        self.assertTrue(
+            can_be_department_admin(self.admin)
+        )
+
+    def test_nurse_can_be_department_admin(self):
+        self.assertTrue(
+            can_be_department_admin(self.nurse)
+        )
+
+    def test_inactive_staff_cannot_be_department_admin(self):
+        self.assertFalse(
+            can_be_department_admin(self.inactive_doctor)
+        )
+
+    def test_pending_staff_cannot_be_department_admin(self):
+        self.assertFalse(
+            can_be_department_admin(self.pending_user)
+        )
+
+    def test_staff_without_profession_cannot_be_department_admin(self):
+        self.nurse.requested_role = None
+
+        self.assertFalse(
+            can_be_department_admin(self.nurse)
+        )
+
+    def test_superuser_can_be_department_admin(self):
+        User = get_user_model()
+
+        superuser = User.objects.create_superuser(
+            email="superuser@example.com",
+            name="System Superuser",
+            password="StrongPassword123!",
+        )
+
+        self.assertTrue(
+            can_be_department_admin(superuser)
+        )
+
+    def test_staff_list_returns_admin_candidate_eligibility(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get("/api/auth/users/")
+
+        self.assertEqual(response.status_code, 200)
+
+        active_staff = self.find_staff(
+            response.data,
+            self.nurse.id,
+        )
+
+        inactive_staff = self.find_staff(
+            response.data,
+            self.inactive_doctor.id,
+        )
+
+        self.assertTrue(
+            active_staff["can_be_department_admin"]
+        )
+
+        self.assertFalse(
+            inactive_staff["can_be_department_admin"]
+        )

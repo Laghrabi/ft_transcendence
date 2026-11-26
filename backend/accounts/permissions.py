@@ -81,6 +81,23 @@ def can_view_inactive_staff(user):
         department__is_active=True,
     ).exists()
 
+def can_be_department_admin(user):
+    """
+    Check whether a user is eligible to become
+    a Department Administrator.
+    """
+
+    if not is_active_approved_user(user):
+        return False
+
+    if user.is_superuser:
+        return True
+
+    return (
+        user.requested_role_id is not None
+        and user.requested_role.name in ("Nurse", "Doctor")
+    )
+
 def can_participate_in_tasks(user):
     """
     Check whether the user can participate in task workflows.

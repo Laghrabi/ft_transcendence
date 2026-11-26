@@ -15,6 +15,7 @@ from organizations.serializers import (
     RolePermissionSerializer,
     TransferDepartmentAdministratorSerializer,
 )
+from .permissions import can_be_department_admin
 
 
 def _has_active_admin_role(user):
@@ -300,6 +301,7 @@ class AdminStaffListSerializer(serializers.ModelSerializer):
     is_department_admin = serializers.SerializerMethodField()
     can_activate = serializers.SerializerMethodField()
     can_deactivate = serializers.SerializerMethodField()
+    can_be_department_admin = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -314,11 +316,15 @@ class AdminStaffListSerializer(serializers.ModelSerializer):
             "is_department_admin",
             "can_activate",
             "can_deactivate",
+            "can_be_department_admin",
         ]
         read_only_fields = fields
 
     def get_is_department_admin(self, obj):
         return _has_active_admin_role(obj)
+
+    def get_can_be_department_admin(self, obj):
+        return can_be_department_admin(obj)
 
     def get_can_activate(self, obj):
         return (

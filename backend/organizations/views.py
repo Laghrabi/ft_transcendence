@@ -15,18 +15,36 @@ from .models import (
 from accounts.permissions import (
     IsApprovedUser,
     can_manage_department,
+    is_active_approved_user,
+    can_view_inactive_staff,
 )
 from audit.services import record_audit_event
 from .serializers import (
+    PublicDepartmentSerializer,
     DepartmentSerializer,
     DepartmentCreateSerializer,
     DepartmentMembershipSerializer,
     RoleSerializer,
     TransferDepartmentAdministratorSerializer,
 )
-from django.db.models import Q
+from django.db.models import Q, Prefetch
 from workflow.models import Case, Task
 
+
+def _department_queryset():
+    administrator_memberships = (
+        DepartmentMembership.objects.filter(
+            role__name="Administrator"
+        ).select_related("user").order_by("id")
+    )
+
+    return Department.objects.prefetch_related(
+        Prefetch(
+            "departmentmembership_set",
+            queryset=administrator_memberships,
+            to_attr="administrator_memberships",
+        )
+    )
 
 @method_decorator(csrf_protect, name="dispatch")
 class DepartmentListCreateView(APIView):
@@ -50,16 +68,24 @@ class DepartmentListCreateView(APIView):
 
     def get(self, request):
 
-        departments = Department.objects.all().order_by("id")
+        if is_active_approved_user(request.user):
+            departments = _department_queryset().order_by("id")
 
-        serializer = DepartmentSerializer(
-            departments,
-            many=True
-        )
+            serializer = DepartmentSerializer(
+                departments,
+                many=True,
+            )
+        else:
+            departments = Department.objects.all().order_by("id")
+
+            serializer = PublicDepartmentSerializer(
+                departments,
+                many=True,
+            )
 
         return Response(
             serializer.data,
-            status=status.HTTP_200_OK
+            status=status.HTTP_200_OK,
         )
 
     def post(self, request):
@@ -130,6 +156,19 @@ class DepartmentDetailView(APIView):
     """
 
     permission_classes = [IsApprovedUser]
+
+    def get(self, request, department_id):
+        department = get_object_or_404(
+            _department_queryset(),
+            id=department_id,
+        )
+
+        serializer = DepartmentSerializer(department)
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_200_OK,
+        )
 
     def patch(self, request, department_id):
         """
@@ -224,13 +263,21 @@ class DepartmentMembershipListCreateView(APIView):
 
     def get(self, request):
 
-        memberships = DepartmentMembership.objects.all().order_by("id")
+        memberships = DepartmentMembership.objects.select_related(
+            "user",
+            "user__requested_role",
+            "role",
+        ).order_by("id")
 
         if not request.user.is_superuser:
             memberships = memberships.filter(
-                user__is_active=True,
                 user__approval_status="approved"
             )
+
+            if not can_view_inactive_staff(request.user):
+                memberships = memberships.filter(
+                    user__is_active=True
+                )
 
         department_id = request.query_params.get("department_id")
 
@@ -746,6 +793,8 @@ class TransferDepartmentAdministratorView(APIView):
                     update_fields=["role"]
                 )
 
+            department.save(update_fields=["updated_at"])
+
             record_audit_event(
                 actor=request.user,
                 action="department.administrator.transferred",
@@ -848,7 +897,7 @@ class DeactivateDepartmentView(APIView):
             department.is_active = False
 
             department.save(
-                update_fields=["is_active"]
+                update_fields=["is_active", "updated_at"]
             )
 
             record_audit_event(
@@ -907,7 +956,7 @@ class ActivateDepartmentView(APIView):
             department.is_active = True
 
             department.save(
-                update_fields=["is_active"]
+                update_fields=["is_active", "updated_at"]
             )
 
             record_audit_event(
@@ -1014,7 +1063,7 @@ class UpdateDepartmentTaskAcceptanceView(APIView):
                 department.accepts_new_tasks = accepts_new_tasks
 
                 department.save(
-                    update_fields=["accepts_new_tasks"]
+                    update_fields=["accepts_new_tasks", "updated_at"]
                 )
 
                 record_audit_event(
