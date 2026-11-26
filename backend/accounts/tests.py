@@ -900,6 +900,8 @@ class PendingRegistrationsTests(TestCase):
             "id",
             "name",
             "email",
+            "avatar",
+            "date_joined",
             "approval_status",
             "requested_department",
             "requested_department_name",
@@ -4063,6 +4065,11 @@ class StaffListTests(APITestCase):
                 "avatar",
                 "status",
                 "is_active",
+                "profession",
+                "is_department_admin",
+                "can_activate",
+                "can_deactivate",
+                "can_be_department_admin",
             },
         )
 
@@ -5207,6 +5214,9 @@ class DepartmentListCreateTests(APITestCase):
         self.assertEqual(response.data[0]["id"], self.emergency.id)
         self.assertEqual(response.data[1]["id"], self.cardiology.id)
         self.assertEqual(response.data[0]["name"], "Emergency")
+        self.assertIn("administrator", response.data[0])
+        self.assertIn("created_at", response.data[0])
+        self.assertIn("updated_at", response.data[0])
 
     def test_admin_can_list_departments(self):
         self.client.force_authenticate(user=self.admin)
@@ -5224,6 +5234,9 @@ class DepartmentListCreateTests(APITestCase):
                 "description",
                 "is_active",
                 "accepts_new_tasks",
+                "created_at",
+                "updated_at",
+                "administrator",
             },
         )
 
@@ -5234,6 +5247,9 @@ class DepartmentListCreateTests(APITestCase):
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 2)
+        self.assertNotIn("administrator", response.data[0])
+        self.assertNotIn("created_at", response.data[0])
+        self.assertNotIn("updated_at", response.data[0])
 
     def test_pending_user_can_list_departments(self):
         self.client.force_authenticate(user=self.pending_user)
@@ -5758,10 +5774,10 @@ class DepartmentDetailAndActivationTests(APITestCase):
             ).exists()
         )
 
-    def test_detail_get_is_not_supported(self):
+    def test_detail_get_is_supported(self):
         self.client.force_authenticate(user=self.admin)
         response = self.client.get(self.detail_url)
-        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.status_code, 200)
 
     def test_department_deactivation_preserves_memberships(self):
         self.client.force_authenticate(user=self.admin)
@@ -6035,7 +6051,17 @@ class DepartmentMembershipListCreateTests(APITestCase):
 
         self.assertEqual(
             set(membership.keys()),
-            {"id", "user", "department", "role"},
+            {
+                "id",
+                "user",
+                "department",
+                "role",
+                "user_name",
+                "user_avatar",
+                "profession",
+                "role_name",
+                "is_active",
+            },
         )
         self.assertEqual(membership["user"], self.staff.id)
         self.assertEqual(
@@ -6043,6 +6069,26 @@ class DepartmentMembershipListCreateTests(APITestCase):
             self.emergency.id,
         )
         self.assertEqual(membership["role"], self.nurse.id)
+
+        self.assertEqual(
+            membership["user_name"],
+            self.staff.name,
+        )
+
+        self.assertEqual(
+            membership["user_avatar"],
+            self.staff.avatar,
+        )
+
+        self.assertEqual(
+            membership["role_name"],
+            self.nurse.name,
+        )
+
+        self.assertEqual(
+            membership["is_active"],
+            self.staff.is_active,
+        )
 
     # GET: Query parameter validation
 
@@ -6466,6 +6512,93 @@ class DepartmentMembershipListCreateTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, 405)
+
+    def test_department_admin_can_view_inactive_memberships(self):
+        DepartmentMembership.objects.create(
+            user=self.viewer,
+            department=self.cardiology,
+            role=Role.objects.get(name="Administrator"),
+        )
+
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(
+            self.url,
+            {"department_id": self.emergency.id},
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(len(response.data), 2)
+
+        ids = {
+            response.data[0]["id"],
+            response.data[1]["id"],
+        }
+
+        self.assertEqual(
+            ids,
+            {
+                self.active_membership.id,
+                self.inactive_membership.id,
+            },
+        )
+
+    def test_department_admin_excludes_unapproved_memberships(self):
+        admin_membership = DepartmentMembership.objects.create(
+            user=self.viewer,
+            department=self.cardiology,
+            role=Role.objects.get(name="Administrator"),
+        )
+
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+
+        ids = set()
+        index = 0
+
+        while index < len(response.data):
+            ids.add(response.data[index]["id"])
+            index += 1
+
+        self.assertEqual(
+            ids,
+            {
+                self.active_membership.id,
+                self.inactive_membership.id,
+                admin_membership.id,
+            },
+        )
+
+    def test_inactive_department_admin_has_regular_visibility(self):
+        DepartmentMembership.objects.create(
+            user=self.viewer,
+            department=self.cardiology,
+            role=Role.objects.get(name="Administrator"),
+        )
+
+        self.cardiology.is_active = False
+        self.cardiology.save(
+            update_fields=["is_active", "updated_at"]
+        )
+
+        self.client.force_authenticate(user=self.viewer)
+
+        response = self.client.get(
+            self.url,
+            {"department_id": self.emergency.id},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+
+        self.assertEqual(
+            response.data[0]["id"],
+            self.active_membership.id,
+        )
 
 
 class DepartmentMembershipDetailTests(APITestCase):
