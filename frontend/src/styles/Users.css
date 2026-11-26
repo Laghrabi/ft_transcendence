@@ -1,0 +1,146 @@
+/* Selects the element with the class "users-directory" */
+.users-directory {
+    margin-top: 24px; /* Adds 24px of space outside the top of the container */
+    padding: 24px; /* Adds 24px of space between the content and the container's edges */
+    background-color: #ffffff; /* Sets the background color to white */
+    border: 1px solid #e5e0d8; /* Adds a solid, 1px thick, light beige border */
+    border-radius: 16px; /* Rounds the four corners of the container */
+}
+
+/* Selects all h2 headings inside the users-directory container */
+.users-directory h2 {
+    margin: 0 0 24px; /* Sets top, left and right margins to 0, and bottom margin to 24px */
+    font-size: 20px; /* Sets the text size to 20 pixels */
+    color: #2e3230; /* Sets the text color to dark gray */
+}
+
+/* Selects the element with the class "users-table" */
+.users-table {
+    width: 100%; /* Makes the table occupy the entire available width of its container */
+    border-collapse: separate; /* Merges adjacent table cell borders into a single border */
+    border-spacing: 0;
+    text-align: left; /* Aligns the text inside the table to the left */
+}
+
+/* Selects all table header cells (th) inside users-table */
+.users-table th {
+    padding: 16px; /* Adds 16px of internal space on all four sides of each header cell */
+    background-color: #f5f1ea; /* Sets the header background color to light beige */
+    color: #6b6358; /* Sets the header text color to brownish gray */
+    font-size: 13px; /* Sets the header text size to 13 pixels */
+    font-weight: 600; /* Makes the header text semi-bold */
+}
+
+/* Round the left corners of the first header cell */
+.users-table th:first-child {
+    border-radius: 10px 0 0 10px;
+}
+
+/* Round the right corners of the last header cell */
+.users-table th:last-child {
+    border-radius: 0 10px 10px 0;
+}
+
+/* Selects all table data cells (td) inside users-table */
+.users-table td {
+    padding: 16px; /* Adds 16px of internal space on all four sides of each data cell */
+    border-bottom: 1px solid #e5e0d8; /* Adds a solid, 1px thick, light beige border below each cell */
+    font-size: 14px; /* Sets the text size to 14 pixels */
+    color: #2e3230; /* Sets the text color to dark gray */
+}
+
+/* Selects all data cells (td) inside the last row (tr) of the table body (tbody) */
+.users-table tbody tr:last-child td {
+    border-bottom: none; /* Removes the bottom border from the last row */
+}
+
+/* Selects all buttons inside users-table */
+.users-table button {
+    background: transparent; /* Makes the button background invisible */
+    border: none; /* Removes the button's default border */
+    font-size: 24px; /* Sets the button's text or text-based icon size to 24 pixels */
+    cursor: pointer; /* Changes the mouse cursor to a pointing hand when hovering over the button */
+    color: #6b6358; /* Sets the button's text or inherited icon color to brownish gray */
+}
+
+/* Selects the container that holds the staff avatar and personal information */
+.users-staff {
+    display: flex; /* Places the child elements next to each other horizontally by default */
+    align-items: center; /* Aligns the child elements vertically in the center */
+    gap: 12px; /* Adds 12px of space between the avatar and staff information */
+}
+
+/* Selects the staff member's avatar */
+.users-avatar {
+    width: 40px; /* Sets the avatar's width to 40 pixels */
+    height: 40px; /* Sets the avatar's height to 40 pixels */
+    border-radius: 50%; /* Turns the square avatar into a circle */
+    background-color: #e1ecdf; /* Sets the background color to light green */
+    color: #4a7c59; /* Sets the text color to dark green */
+
+    display: flex; /* Enables the Flexbox layout to position the content inside the avatar */
+    align-items: center; /* Centers the content vertically inside the avatar */
+    justify-content: center; /* Centers the content horizontally inside the avatar */
+
+    font-size: 14px; /* Sets the text size of the staff member's initials to 14 pixels */
+    font-weight: 600; /* Makes the text semi-bold */
+    flex-shrink: 0; /* Prevents the avatar from shrinking when there is not enough available space */
+}
+
+/* Selects the container that holds the staff member's name and email */
+.users-staff-info {
+    display: flex; /* Enables the Flexbox layout for the child elements */
+    flex-direction: column; /* Places the name and email vertically, one below the other */
+    gap: 4px; /* Adds 4px of space between the name and email */
+}
+
+/* Selects the staff member's name */
+.users-staff-name {
+    font-weight: 600; /* Makes the staff member's name semi-bold */
+    color: #2e3230; /* Sets the name's text color to dark gray */
+}
+
+/* Selects the staff member's email */
+.users-staff-email {
+    font-size: 12px; /* Sets the email's text size to 12 pixels */
+    color: #6b6358; /* Sets the email's text color to brownish gray */
+}
+
+/* Selects the container that holds the staff member's profession and Administrator badge */
+.users-role {
+    display: flex; /* Enables the Flexbox layout for the child elements */
+    align-items: flex-start; /* Aligns the child elements to the left without stretching them */
+    flex-direction: column; /* Places the profession and Administrator badge vertically, one below the other */
+    gap: 6px; /* Adds 6px of space between the child elements */
+}
+
+/* Selects the Administrator badge */
+.users-admin-badge {
+    padding: 4px 8px; /* Adds 4px of internal space at the top and bottom, and 8px on the left and right */
+    border-radius: 6px; /* Rounds the four corners of the badge */
+    background-color: #e1ecdf; /* Sets the badge's background color to light green */
+    color: #386047; /* Sets the badge's text color to dark green */
+    font-size: 11px; /* Sets the badge's text size to 11 pixels */
+    font-weight: 600; /* Makes the text semi-bold */
+}
+
+/* Defines the common appearance of both Active and Inactive activity badges */
+.users-activity {
+    display: inline-block; /* Allows the badge to stay inline with other elements while supporting padding, width and height */
+    padding: 6px 12px; /* Adds 6px of internal space at the top and bottom, and 12px on the left and right */
+    border-radius: 20px; /* Rounds the corners to give the badge a pill-like shape */
+    font-size: 12px; /* Sets the badge's text size to 12 pixels */
+    font-weight: 600; /* Makes the text semi-bold */
+}
+
+/* Defines the colors of the activity badge when the staff account is active */
+.users-active {
+    background-color: #e1ecdf; /* Sets the background color to light green */
+    color: #386047; /* Sets the text color to dark green */
+}
+
+/* Defines the colors of the activity badge when the staff account is inactive */
+.users-inactive {
+    background-color: #fbe4e4; /* Sets the background color to light red */
+    color: #b83230; /* Sets the text color to dark red */
+}

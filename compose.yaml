@@ -58,8 +58,8 @@ services:
     container_name: careflow_nginx
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      - "8080:80"
+      - "8443:443"
     volumes:
       - ./infra/nginx/conf.d:/etc/nginx/conf.d:ro
       - ./infra/nginx/ssl:/etc/nginx/ssl:ro
