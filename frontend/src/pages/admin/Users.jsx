@@ -4,7 +4,9 @@ import { getStaffMembers } from "../../api/users";
 import Sidebar from "../../components/common/Sidebar";
 import Topbar from "../../components/common/Topbar";
 import StatCard from "../../components/common/StatCard";
+import Notifications from "../../components/common/Notifications";
 import StaffDetailsModal from "../../components/users/StaffDetailsModal";
+import StaffActivityModal from "../../components/users/StaffActivityModal";
 
 import "../../styles/Common.css";
 import "../../styles/Dashboard.css";
@@ -27,6 +29,9 @@ function Users() {
     const [activityFilter, setActivityFilter] = useState("all");
     const [openMenuId, setOpenMenuId] = useState(null);
     const [selectedStaffId, setSelectedStaffId] = useState(null);
+    const [activityAction, setActivityAction] = useState(null);
+    const [refreshVersion, setRefreshVersion] = useState(0);
+    const [successMessage, setSuccessMessage] = useState("");
 
     useEffect(() => {
         let ignore = false;
@@ -54,7 +59,7 @@ function Users() {
         return () => {
             ignore = true;
         };
-    }, []);
+    }, [refreshVersion]);
 
     useEffect(() => {
         if (openMenuId === null) {
@@ -123,6 +128,42 @@ function Users() {
             ?.focus();
     }
 
+    function openActivityModal(staff, action) {
+        setOpenMenuId(null);
+        setSuccessMessage("");
+
+        setActivityAction({
+            staff: staff,
+            action: action,
+        });
+    }
+
+    function closeActivityModal() {
+        setActivityAction(null);
+
+        document
+            .getElementById(
+                `users-action-trigger-${activityAction?.staff.id}`
+            )
+            ?.focus();
+    }
+
+    function refreshStaffDirectory() {
+        setLoading(true);
+        setError(null);
+        setOpenMenuId(null);
+
+        setRefreshVersion((previousVersion) =>
+            previousVersion + 1
+        );
+    }
+
+    function handleActivitySuccess(message) {
+        setActivityAction(null);
+        setSuccessMessage(message);
+        refreshStaffDirectory();
+    }
+
     return (
         <div className="cf-dashboard">
             <Sidebar />
@@ -147,6 +188,26 @@ function Users() {
                             description="Data unavailable"
                         />
                     </section>
+
+                    {successMessage && (
+                        <div className="users-success-message" role="status">
+                            <span className="material-symbols-outlined">
+                                check_circle
+                            </span>
+
+                            <span>{successMessage}</span>
+
+                            <button
+                                type="button"
+                                aria-label="Dismiss message"
+                                onClick={() => setSuccessMessage("")}
+                            >
+                                <span className="material-symbols-outlined">
+                                    close
+                                </span>
+                            </button>
+                        </div>
+                    )}
 
                     <section className="users-directory">
                         <div className="users-directory-header">
@@ -209,6 +270,13 @@ function Users() {
                                         <td colSpan={4}
                                             className="users-table-message users-error">
                                             {error}
+                                            <button
+                                                type="button"
+                                                className="users-retry-button"
+                                                onClick={refreshStaffDirectory}
+                                            >
+                                                Retry loading staff
+                                            </button>
                                         </td>
                                     </tr>
                                 )}
@@ -324,11 +392,12 @@ function Users() {
                                                             <button
                                                                 type="button"
                                                                 className="users-action-option users-action-activate"
-                                                                disabled
+                                                                onClick={() => openActivityModal(staff, "activate")}
                                                             >
                                                                 <span className="material-symbols-outlined">
                                                                     person_check
                                                                 </span>
+
                                                                 Activate
                                                             </button>
                                                         )}
@@ -337,11 +406,12 @@ function Users() {
                                                             <button
                                                                 type="button"
                                                                 className="users-action-option users-action-deactivate"
-                                                                disabled
+                                                                onClick={() => openActivityModal(staff, "deactivate")}
                                                             >
                                                                 <span className="material-symbols-outlined">
                                                                     person_off
                                                                 </span>
+
                                                                 Deactivate
                                                             </button>
                                                         )}
@@ -365,6 +435,15 @@ function Users() {
                     )}
                     onClose={closeStaffDetails}
                     getInitials={getInitials}
+                />
+            )}
+
+            {activityAction !== null && (
+                <StaffActivityModal
+                    staff={activityAction.staff}
+                    action={activityAction.action}
+                    onClose={closeActivityModal}
+                    onSuccess={handleActivitySuccess}
                 />
             )}
         </div>
