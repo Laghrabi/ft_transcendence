@@ -8,6 +8,7 @@ from .serializers import AnalyticsDateRangeSerializer
 from .services import get_analytics_summary, get_staff_summary, get_departments_summary, get_department_metrics, get_dashboard_summary
 from accounts.permissions import can_view_hospital_analytics, can_view_department_analytics
 from organizations.models import Department
+from .csv_utils import summary_to_csv
 
 
 
@@ -20,16 +21,18 @@ class AnalyticsSummaryAPIView(APIView):
         serializer = AnalyticsDateRangeSerializer(data=request.query_params)
         serializer.is_valid(raise_exception=True)
         dates = serializer.validated_data
-        return Response(get_analytics_summary(), status=200)
-    # def post(self, request):
+        return Response(get_analytics_summary(**dates), status=200)
 
 class AnalyticsExportAPIView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
+        if not can_view_hospital_analytics(request.user):
+            return Response({"detail": "Permission denied."},status=403)
         serializer = AnalyticsDateRangeSerializer(data=request.query_params)
         serializer.is_valid(raise_exception=True)
         dates = serializer.validated_data
-        return Response({"detail": "Analytics export is not implemented yet."}, status=501)
+        summary = get_analytics_summary(**dates)
+        return summary_to_csv(summary=summary)
 
 class AnalyticsStaffAPIView(APIView):
     permission_classes = [IsAuthenticated]

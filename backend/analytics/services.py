@@ -4,15 +4,31 @@ from organizations.models import Department, DepartmentMembership
 from django.utils import timezone
 from django.db.models import Q
 
-def get_analytics_summary():
-    total_cases = Case.objects.count()
-    closed_cases = Case.objects.filter(status=Case.Status.CLOSED).count()
-    active_tasks = Task.objects.filter(status__in=Task.ACTIVE_STATUSES).count()
-    open_blockers = Blocker.objects.filter(status=Blocker.Status.OPEN).count()
+def get_analytics_summary(start_date=None, end_date=None):
+    cases = Case.objects.all()
+    tasks =  Task.objects.all()
+    blockers = Blocker.objects.all()
+    
+    if start_date is not None:
+      cases = cases.filter(created_at__date__gte=start_date)
+      tasks = tasks.filter(created_at__date__gte=start_date)
+      blockers = blockers.filter(reported_at__date__gte=start_date)
+    if end_date is not None:
+      cases = cases.filter(created_at__date__lte=end_date)
+      tasks = tasks.filter(created_at__date__lte=end_date)
+      blockers = blockers.filter(reported_at__date__lte=end_date)
+      
+    total_cases = cases.count()
+    closed_cases = cases.filter(status=Case.Status.CLOSED).count()
+
+    active_tasks = tasks.filter(status__in=Task.ACTIVE_STATUSES).count()
+    open_blockers = blockers.filter(status=Blocker.Status.OPEN).count()
+    
     if total_cases > 0:
       closure_rate = round((closed_cases / total_cases) * 100, 2)
     else:
         closure_rate = 0.0
+        
     return    {
           "total_cases": total_cases,
           "closed_cases": closed_cases,
@@ -76,3 +92,48 @@ def get_dashboard_summary():
   "completed_today": completed_tasks_today,
   "blocked_or_overdue" : blocked_or_overdue
 }
+  
+def get_waiting_time_metrics(department_id):
+    tasks = Task.objects.filter(assigned_department_id=department_id,started_at__isnull=False)
+    total_waiting_hours = 0
+    for task in tasks:
+      waiting = task.started_at - task.created_at
+      total_waiting_hours += waiting.total_seconds() / 3600
+      
+    total_started_tasks = tasks.count()
+    if total_started_tasks > 0:
+      average_waiting_hours = round(total_waiting_hours / total_started_tasks, 2)
+    else:
+      average_waiting_hours = 0.0
+    
+    return {
+      "average_waiting_hours" : average_waiting_hours
+    }
+    
+
+def get_department_bottlenecks(department_id):
+    tasks = Task.objects.filter(assigned_department_id=department_id)
+  
+    blocked_tasks = tasks.filter(status=Task.Status.BLOCKED).count()
+    blocked_or_overdue = tasks.filter(
+      Q(status=Task.Status.BLOCKED) |
+      (
+          Q(status__in=[
+              Task.Status.ASSIGNED,
+              Task.Status.IN_PROGRESS
+          ]) &
+          Q(due_at__lt=timezone.now())
+      )
+      ).count()
+    
+    overdue_tasks = tasks.filter(
+    status__in=Task.ACTIVE_STATUSES,
+    due_at__lt=timezone.now()
+    ).count()
+    
+    return {
+    "department_id": department_id,
+    "blocked_tasks": blocked_tasks,
+    "overdue_tasks" : overdue_tasks,
+    "blocked_or_overdue": blocked_or_overdue
+    }
