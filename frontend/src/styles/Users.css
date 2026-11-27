@@ -144,3 +144,108 @@
     background-color: #fbe4e4; /* Sets the background color to light red */
     color: #b83230; /* Sets the text color to dark red */
 }
+
+.users-avatar {
+    overflow: hidden;
+}
+
+.users-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.users-table .users-table-message {
+    padding: 40px 16px;
+    text-align: center;
+    color: #6b6358;
+}
+
+.users-table .users-error {
+    color: #b83230;
+}
+
+.users-directory-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.users-directory-header h2 {
+    margin: 0;
+}
+
+.users-directory-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.users-search {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background-color: #f5f1ea;
+    border: 1px solid #e5e0d8;
+    border-radius: 10px;
+}
+
+.users-search .material-symbols-outlined {
+    font-size: 20px;
+    color: #6b6358;
+}
+
+.users-search input {
+    width: 220px;
+    min-width: 0;
+    background-color: transparent;
+    border: none;
+    outline: none;
+    color: #2e3230;
+    font-family: inherit;
+    font-size: 13px;
+}
+
+.users-search input::placeholder {
+    color: #6b6358;
+}
+
+.users-search:focus-within {
+    border-color: #4a7c59;
+}
+
+.users-activity-filter {
+    padding: 10px 14px;
+    background-color: #f5f1ea;
+    border: 1px solid #e5e0d8;
+    border-radius: 10px;
+    color: #2e3230;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.users-activity-filter:focus-visible {
+    outline: 2px solid #4a7c59;
+    outline-offset: 2px;
+}
+
+@media (max-width: 600px) {
+    .users-directory-controls {
+        width: 100%;
+    }
+
+    .users-search {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .users-search input {
+        width: 100%;
+    }
+}

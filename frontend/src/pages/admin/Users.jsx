@@ -1,3 +1,6 @@
+import { useState, useEffect } from "react";
+import { getStaffMembers } from "../../api/users";
+
 import Sidebar from "../../components/common/Sidebar";
 import Topbar from "../../components/common/Topbar";
 import StatCard from "../../components/common/StatCard";
@@ -6,37 +9,65 @@ import "../../styles/Common.css";
 import "../../styles/Dashboard.css";
 import "../../styles/Users.css";
 
-const staffMembers = [
-    {
-        id: 1,
-        name: "Marcus Vance",
-        email: "marcus@hospital.com",
-        initials: "MV",
-        profession: "Doctor",
-        is_active: true,
-        is_department_admin: true,
-    },
-    {
-        id: 2,
-        name: "Sarah Chen",
-        email: "sarah@hospital.com",
-        initials: "SC",
-        profession: "Nurse",
-        is_active: true,
-        is_department_admin: false,
-    },
-    {
-        id: 3,
-        name: "Tariq Khan",
-        email: "tariq@hospital.com",
-        initials: "TK",
-        profession: "Doctor",
-        is_active: false,
-        is_department_admin: false,
-    },
-];
+function getInitials(name) {
+    return name
+        .trim()
+        .split(/\s+/)
+        .slice(0, 2)
+        .map((word) => word.charAt(0).toUpperCase())
+        .join("");
+}
 
 function Users() {
+    const [staffMembers, setStaffMembers] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
+    const [searchQuery, setSearchQuery] = useState("");
+    const [activityFilter, setActivityFilter] = useState("all");
+
+    useEffect(() => {
+        let ignore = false;
+
+        async function loadStaffMembers() {
+            try {
+                const data = await getStaffMembers();
+
+                if (!ignore) {
+                    setStaffMembers(data);
+                }
+            } catch (err) {
+                if (!ignore) {
+                    setError(err.message);
+                }
+            } finally {
+                if (!ignore) {
+                    setLoading(false);
+                }
+            }
+        }
+
+        loadStaffMembers();
+
+        return () => {
+            ignore = true;
+        };
+    }, []);
+
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+
+    const filteredStaffMembers = staffMembers.filter((staff) => {
+        const matchesSearch =
+            staff.name.toLowerCase().includes(normalizedQuery) ||
+            staff.email.toLowerCase().includes(normalizedQuery);
+
+        const matchesActivity =
+            activityFilter === "all" ||
+            (activityFilter === "active" && staff.is_active) ||
+            (activityFilter === "inactive" && !staff.is_active);
+
+        return matchesSearch && matchesActivity;
+    });
+
     return (
         <div className="cf-dashboard">
             <Sidebar />
@@ -63,7 +94,40 @@ function Users() {
                     </section>
 
                     <section className="users-directory">
-                        <h2>Staff Directory</h2>
+                        <div className="users-directory-header">
+                            <h2>Staff Directory</h2>
+
+                            <div className="users-directory-controls">
+                                <div className="users-search">
+                                    <span className="material-symbols-outlined">
+                                        search
+                                    </span>
+
+                                    <input
+                                        type="search"
+                                        placeholder="Search by name or email..."
+                                        aria-label="Search staff by name or email"
+                                        value={searchQuery}
+                                        onChange={(event) =>
+                                            setSearchQuery(event.target.value)
+                                        }
+                                    />
+                                </div>
+
+                                <select
+                                    className="users-activity-filter"
+                                    aria-label="Filter by account activity"
+                                    value={activityFilter}
+                                    onChange={(event) =>
+                                        setActivityFilter(event.target.value)
+                                    }
+                                >
+                                    <option value="all">All statuses</option>
+                                    <option value="active">Active</option>
+                                    <option value="inactive">Inactive</option>
+                                </select>
+                            </div>
+                        </div>
 
                         <table className="users-table">
                             <thead>
@@ -76,12 +140,61 @@ function Users() {
                             </thead>
 
                             <tbody>
-                                {staffMembers.map((staff) => (
+                                {loading && (
+                                    <tr>
+                                        <td colSpan={4}
+                                            className="users-table-message">
+                                            Loading staff members...
+                                        </td>
+                                    </tr>
+                                )}
+
+                                {!loading && error && (
+                                    <tr>
+                                        <td colSpan={4}
+                                            className="users-table-message users-error">
+                                            {error}
+                                        </td>
+                                    </tr>
+                                )}
+
+                                {!loading && !error &&
+                                    staffMembers.length === 0 && (
+                                    <tr>
+                                        <td colSpan={4}
+                                            className="users-table-message">
+                                            No staff members found.
+                                        </td>
+                                    </tr>
+                                )}
+
+                                {!loading && !error &&
+                                    staffMembers.length > 0 &&
+                                    filteredStaffMembers.length === 0 && (
+                                    <tr>
+                                        <td
+                                            colSpan={4}
+                                            className="users-table-message"
+                                        >
+                                            No matching staff members.
+                                        </td>
+                                    </tr>
+                                )}
+
+                                {!loading && !error &&
+                                    filteredStaffMembers.map((staff) => (
                                     <tr key={staff.id}>
                                         <td>
                                             <div className="users-staff">
                                                 <div className="users-avatar">
-                                                    {staff.initials}
+                                                    {staff.avatar ? (
+                                                        <img
+                                                            src={staff.avatar}
+                                                            alt=""
+                                                        />
+                                                    ) : (
+                                                        getInitials(staff.name)
+                                                    )}
                                                 </div>
 
                                                 <div className="users-staff-info">
@@ -98,7 +211,9 @@ function Users() {
 
                                         <td>
                                             <div className="users-role">
-                                                <span>{staff.profession}</span>
+                                                <span>
+                                                    {staff.profession ?? "—"}
+                                                </span>
 
                                                 {staff.is_department_admin && (
                                                     <span className="users-admin-badge">
@@ -116,12 +231,19 @@ function Users() {
                                                         : "users-activity users-inactive"
                                                 }
                                             >
-                                                {staff.is_active ? "Active" : "Inactive"}
+                                                {staff.is_active
+                                                    ? "Active"
+                                                    : "Inactive"}
                                             </span>
                                         </td>
 
                                         <td>
-                                            <button type="button">⋯</button>
+                                            <button
+                                                type="button"
+                                                aria-label={`Actions for ${staff.name}`}
+                                            >
+                                                ⋯
+                                            </button>
                                         </td>
                                     </tr>
                                 ))}
