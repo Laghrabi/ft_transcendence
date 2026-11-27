@@ -4,6 +4,7 @@ import { getStaffMembers } from "../../api/users";
 import Sidebar from "../../components/common/Sidebar";
 import Topbar from "../../components/common/Topbar";
 import StatCard from "../../components/common/StatCard";
+import StaffDetailsModal from "../../components/users/StaffDetailsModal";
 
 import "../../styles/Common.css";
 import "../../styles/Dashboard.css";
@@ -24,6 +25,8 @@ function Users() {
     const [error, setError] = useState(null);
     const [searchQuery, setSearchQuery] = useState("");
     const [activityFilter, setActivityFilter] = useState("all");
+    const [openMenuId, setOpenMenuId] = useState(null);
+    const [selectedStaffId, setSelectedStaffId] = useState(null);
 
     useEffect(() => {
         let ignore = false;
@@ -53,6 +56,39 @@ function Users() {
         };
     }, []);
 
+    useEffect(() => {
+        if (openMenuId === null) {
+            return;
+        }
+
+        function handleOutsideClick(event) {
+            if (
+                event.target instanceof Element &&
+                !event.target.closest(".users-actions")
+            ) {
+                setOpenMenuId(null);
+            }
+        }
+
+        function handleEscape(event) {
+            if (event.key === "Escape") {
+                setOpenMenuId(null);
+
+                document
+                    .getElementById(`users-action-trigger-${openMenuId}`)
+                    ?.focus();
+            }
+        }
+
+        document.addEventListener("pointerdown", handleOutsideClick);
+        document.addEventListener("keydown", handleEscape);
+
+        return () => {
+            document.removeEventListener("pointerdown", handleOutsideClick);
+            document.removeEventListener("keydown", handleEscape);
+        };
+    }, [openMenuId]);
+
     const normalizedQuery = searchQuery.trim().toLowerCase();
 
     const filteredStaffMembers = staffMembers.filter((staff) => {
@@ -67,6 +103,25 @@ function Users() {
 
         return matchesSearch && matchesActivity;
     });
+
+    function toggleMenu(staffId) {
+        setOpenMenuId((previousId) =>
+            previousId === staffId ? null : staffId
+        );
+    }
+
+    function openStaffDetails(staffId) {
+        setOpenMenuId(null);
+        setSelectedStaffId(staffId);
+    }
+
+    function closeStaffDetails() {
+        setSelectedStaffId(null);
+
+        document
+            .getElementById(`users-action-trigger-${selectedStaffId}`)
+            ?.focus();
+    }
 
     return (
         <div className="cf-dashboard">
@@ -237,13 +292,62 @@ function Users() {
                                             </span>
                                         </td>
 
-                                        <td>
-                                            <button
-                                                type="button"
-                                                aria-label={`Actions for ${staff.name}`}
-                                            >
-                                                ⋯
-                                            </button>
+                                       <td>
+                                            <div className="users-actions">
+                                                <button
+                                                    type="button"
+                                                    id={`users-action-trigger-${staff.id}`}
+                                                    className="users-action-trigger"
+                                                    aria-label={`Actions for ${staff.name}`}
+                                                    aria-expanded={openMenuId === staff.id}
+                                                    onClick={() => toggleMenu(staff.id)}
+                                                >
+                                                    <span className="material-symbols-outlined">
+                                                        more_horiz
+                                                    </span>
+                                                </button>
+
+                                                {openMenuId === staff.id && (
+                                                    <div className="users-action-menu">
+                                                        <button
+                                                            type="button"
+                                                            className="users-action-option"
+                                                            onClick={() => openStaffDetails(staff.id)}
+                                                        >
+                                                            <span className="material-symbols-outlined">
+                                                                visibility
+                                                            </span>
+                                                            View Staff
+                                                        </button>
+
+                                                        {staff.can_activate === true && (
+                                                            <button
+                                                                type="button"
+                                                                className="users-action-option users-action-activate"
+                                                                disabled
+                                                            >
+                                                                <span className="material-symbols-outlined">
+                                                                    person_check
+                                                                </span>
+                                                                Activate
+                                                            </button>
+                                                        )}
+
+                                                        {staff.can_deactivate === true && (
+                                                            <button
+                                                                type="button"
+                                                                className="users-action-option users-action-deactivate"
+                                                                disabled
+                                                            >
+                                                                <span className="material-symbols-outlined">
+                                                                    person_off
+                                                                </span>
+                                                                Deactivate
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
                                         </td>
                                     </tr>
                                 ))}
@@ -252,6 +356,17 @@ function Users() {
                     </section>
                 </main>
             </div>
+            {selectedStaffId !== null && (
+                <StaffDetailsModal
+                    key={selectedStaffId}
+                    staffId={selectedStaffId}
+                    staffSummary={staffMembers.find(
+                        (staff) => staff.id === selectedStaffId
+                    )}
+                    onClose={closeStaffDetails}
+                    getInitials={getInitials}
+                />
+            )}
         </div>
     );
 }
