@@ -7,12 +7,13 @@ from django.utils.decorators import method_decorator
 from django.middleware.csrf import get_token
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET
+from django.db.models import Prefetch
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 from .models import User
 from organizations.models import Department, DepartmentMembership
-from .permissions import IsApprovedUser, can_manage_department
+from .permissions import IsApprovedUser, can_manage_department, can_view_inactive_staff
 from .serializers import (
     RegisterSerializer,
     PendingRegistrationSerializer,
@@ -20,9 +21,31 @@ from .serializers import (
     UpdateProfileSerializer,
     StaffListSerializer,
     AdminStaffListSerializer,
+    StaffDetailsSerializer,
+    CurrentUserSerializer,
 )
 from audit.services import record_audit_event
 from workflow.models import Task
+
+
+def _staff_details_queryset():
+    """
+    Retrieve users with their registered profession
+    and department membership information.
+    """
+
+    return User.objects.select_related(
+        "requested_role"
+    ).prefetch_related(
+        Prefetch(
+            "departmentmembership_set",
+            queryset=DepartmentMembership.objects.select_related(
+                "department",
+                "role",
+            )
+        )
+    )
+
 
 @method_decorator(csrf_protect, name="dispatch")
 class LoginView(APIView):
@@ -110,9 +133,13 @@ class MeView(APIView):
     permission_classes = [IsApprovedUser]
 
     def get(self, request):
-        serializer = UserProfileSerializer(
-            request.user,
-            context={"request": request}
+        user = _staff_details_queryset().get(
+            pk=request.user.pk
+        )
+
+        serializer = CurrentUserSerializer(
+            user,
+            context={"request": request},
         )
 
         return Response(serializer.data)
@@ -121,19 +148,22 @@ class MeView(APIView):
         serializer = UpdateProfileSerializer(
             request.user,
             data=request.data,
-            partial=True
+            partial=True,
         )
 
         serializer.is_valid(raise_exception=True)
         serializer.save()
 
-        profile_serializer = UserProfileSerializer(
-            request.user,
-            context={"request": request}
+        user = _staff_details_queryset().get(
+            pk=request.user.pk
+        )
+
+        profile_serializer = CurrentUserSerializer(
+            user,
+            context={"request": request},
         )
 
         return Response(profile_serializer.data)
-
 
 @method_decorator(csrf_protect, name="dispatch")
 class RegisterView(APIView):
@@ -457,55 +487,94 @@ class RejectRegistrationView(APIView):
 
 class StaffProfileView(APIView):
     """
-    Retrieve the profile of an active, approved staff member.
-
-    Access is restricted to approved users. Phone number
-    visibility is controlled by UserProfileSerializer.
+    Retrieve an approved staff member's profile
+    according to the requesting user's privileges.
     """
-    
+
     permission_classes = [IsApprovedUser]
 
     def get(self, request, user_id):
-        """Return the profile of the staff member with the given ID."""
+        if can_view_inactive_staff(request.user):
+            user = get_object_or_404(
+                _staff_details_queryset(),
+                id=user_id,
+                approval_status="approved",
+            )
 
-        user = get_object_or_404(
-            User,
-            id=user_id,
-            is_active=True,
-            approval_status="approved"
+            serializer = StaffDetailsSerializer(
+                user,
+                context={"request": request},
+            )
+        else:
+            user = get_object_or_404(
+                User,
+                id=user_id,
+                is_active=True,
+                approval_status="approved",
+            )
+
+            serializer = UserProfileSerializer(
+                user,
+                context={"request": request},
+            )
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_200_OK,
         )
-
-        serializer = UserProfileSerializer(
-            user,
-            context={"request": request}
-        )
-
-        return Response(serializer.data)
 
 class StaffListView(APIView):
     """
-    List approved staff members based on the requesting user's privileges.
+    List approved staff members based on the
+    requesting user's administrative privileges.
 
-    Regular approved users can view only active, approved staff members.
-    Administrators can view all approved staff members, including
-    deactivated accounts, with additional account status information.
+    Regular staff can view active, approved accounts.
+    Superusers and eligible Department Administrators
+    can also view approved inactive accounts.
     """
 
     permission_classes = [IsApprovedUser]
 
     def get(self, request):
-        """Return the appropriate staff list based on the user's privileges."""
-        
-        if request.user.is_superuser is False:
-            users = User.objects.filter(is_active=True, approval_status="approved")
-            serializer = StaffListSerializer(users, many=True)
+        if not can_view_inactive_staff(request.user):
+            users = User.objects.filter(
+                is_active=True,
+                approval_status="approved",
+            ).order_by("id")
+
+            serializer = StaffListSerializer(
+                users,
+                many=True,
+            )
         else:
-            users = User.objects.filter(approval_status="approved")
-            serializer = AdminStaffListSerializer(users, many=True)
+            users = _staff_details_queryset().filter(
+                approval_status="approved"
+            ).order_by("id")
+
+            managed_department_ids = set(
+                DepartmentMembership.objects.filter(
+                    user=request.user,
+                    role__name="Administrator",
+                    department__is_active=True,
+                ).values_list(
+                    "department_id",
+                    flat=True,
+                )
+            )
+
+            serializer = AdminStaffListSerializer(
+                users,
+                many=True,
+                context={
+                    "request": request,
+                    "admin_directory_access": True,
+                    "managed_department_ids": managed_department_ids,
+                },
+            )
 
         return Response(
             serializer.data,
-            status=status.HTTP_200_OK
+            status=status.HTTP_200_OK,
         )
 
 @method_decorator(csrf_protect, name="dispatch")
