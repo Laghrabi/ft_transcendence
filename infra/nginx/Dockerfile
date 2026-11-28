@@ -18,6 +18,7 @@ ENV PORT=80
 ENV SSL_PORT=443
 ENV SERVER_NAME=localhost
 ENV MODSEC_RULE_ENGINE=on
+ENV BLOCKING_PARANOIA=2
 
 # Copy compiled React SPA build
 COPY --from=frontend-builder /build/dist /usr/share/nginx/html
