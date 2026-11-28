@@ -2,7 +2,14 @@
 set -e
 
 TOKEN_FILE="/vault/token/app-token"
+MAX_WAIT=60
+WAITED=0
 until [ -f "$TOKEN_FILE" ] && curl -s -f http://vault:8200/v1/sys/health >/dev/null; do
+  WAITED=$((WAITED + 1))
+  if [ "$WAITED" -ge "$MAX_WAIT" ]; then
+    echo "ERROR: Timed out after ${MAX_WAIT}s waiting for Vault ($TOKEN_FILE and /v1/sys/health)." >&2
+    exit 1
+  fi
   sleep 1
 done
 

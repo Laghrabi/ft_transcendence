@@ -76,6 +76,13 @@ services:
     networks:
       - data-net
       - app-net
+    healthcheck:
+      # TODO(B2): switch to http://127.0.0.1:8000/api/health/live/ once Backend merges B2
+      test: ["CMD-SHELL", "curl -fsS -H 'Host: backend' http://127.0.0.1:8000/api/auth/csrf/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 40s
 
   nginx:
     build:
@@ -90,7 +97,8 @@ services:
       - ./infra/nginx/ssl:/etc/nginx/ssl:ro
       - django_static:/var/www/static:ro
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - app-net
       - public-net
@@ -109,6 +117,12 @@ services:
       - "--web.enable-lifecycle"
     networks:
       - monitoring-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:9090/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   grafana:
     image: grafana/grafana:13.3.2-slim
@@ -126,9 +140,16 @@ services:
       - ./infra/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana_data:/var/lib/grafana
     depends_on:
-      - prometheus
+      prometheus:
+        condition: service_healthy
     networks:
       - monitoring-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
@@ -162,6 +183,12 @@ services:
       - "--path.rootfs=/rootfs"
     networks:
       - monitoring-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:9100/metrics || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:v0.15.0
@@ -179,6 +206,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:9187/metrics || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
 volumes:
   postgres_data:
