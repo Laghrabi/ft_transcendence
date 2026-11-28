@@ -79,8 +79,8 @@ services:
 
   nginx:
     build:
-      context: ./infra/nginx
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infra/nginx/Dockerfile
     container_name: careflow_nginx
     restart: unless-stopped
     ports:
