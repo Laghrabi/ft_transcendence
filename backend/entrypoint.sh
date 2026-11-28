@@ -17,7 +17,7 @@ for k, v in data.items():
 
 python manage.py migrate --noinput
 
-if [ "${SEED_DEV_DATA:-false}" = "true" ]; then
+if [ "${DJANGO_DEBUG:-0}" = "1" ] && [ "$(echo "${SEED_DEV_DATA:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
     python manage.py seed_dev_data --confirm-local --with-staff
 fi
 

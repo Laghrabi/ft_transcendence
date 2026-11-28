@@ -40,7 +40,11 @@ if ! vault kv get secret/careflow >/dev/null 2>&1; then
     POSTGRES_USER="${POSTGRES_USER:-careflow_user}" \
     POSTGRES_PASSWORD="${POSTGRES_PASSWORD:?Error: POSTGRES_PASSWORD required}" \
     DJANGO_SECRET_KEY="${DJANGO_SECRET_KEY:-$GENERATED_KEY}" \
-    REDIS_URL="${REDIS_URL:-redis://redis:6379/0}"
+    REDIS_URL="${REDIS_URL:-redis://redis:6379/0}" \
+    DJANGO_SUPERUSER_EMAIL="${DJANGO_SUPERUSER_EMAIL:-}" \
+    DJANGO_SUPERUSER_NAME="${DJANGO_SUPERUSER_NAME:-}" \
+    DJANGO_SUPERUSER_PASSWORD="${DJANGO_SUPERUSER_PASSWORD:-}" \
+    DEV_STAFF_PASSWORD="${DEV_STAFF_PASSWORD:-}"
 fi
 
 mkdir -p /vault/token

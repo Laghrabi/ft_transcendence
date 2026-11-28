@@ -62,6 +62,7 @@ services:
       DJANGO_DEBUG: "${DJANGO_DEBUG}"
       DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS}"
       DJANGO_ASGI_APP: "${DJANGO_ASGI_APP}"
+      SEED_DEV_DATA: "${SEED_DEV_DATA:-false}"
     volumes:
       - django_static:/app/staticfiles
       - vault_token:/vault/token:ro
@@ -86,8 +87,6 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./infra/nginx/conf.d/default.conf:/etc/nginx/templates/conf.d/default.conf.template:ro
-      - ./infra/nginx/modsecurity/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:/etc/modsecurity.d/owasp-crs/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:ro
       - ./infra/nginx/ssl:/etc/nginx/ssl:ro
       - django_static:/var/www/static:ro
     depends_on:

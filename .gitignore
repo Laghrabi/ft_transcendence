@@ -29,5 +29,9 @@ redis_data/
 .idea/
 .vscode/
 
+# Database Backups
+backups/*
+!backups/.gitkeep
+
 # DevOps Resources
 DevOps_Resources/
