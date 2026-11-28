@@ -1,1 +1,0 @@
-# Thin HTTP endpoints (calls services)

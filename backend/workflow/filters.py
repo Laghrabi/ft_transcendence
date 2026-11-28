@@ -1,1 +1,0 @@
-# django-filter classes for Cases & Tasks
