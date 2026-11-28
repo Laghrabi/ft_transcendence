@@ -1,4 +1,24 @@
 services:
+  vault:
+    image: hashicorp/vault:1.15
+    container_name: careflow_vault
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - vault_data:/vault/file
+      - vault_token:/vault/token
+      - ./infra/vault/config:/vault/config:ro
+      - ./infra/vault/scripts/entrypoint.sh:/entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    networks:
+      - data-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8200/v1/sys/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   db:
     image: postgres:16-alpine
     container_name: careflow_db
@@ -38,51 +58,173 @@ services:
       dockerfile: Dockerfile
     container_name: careflow_backend
     restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      DJANGO_DEBUG: "${DJANGO_DEBUG}"
+      DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS}"
+      DJANGO_ASGI_APP: "${DJANGO_ASGI_APP}"
+      SEED_DEV_DATA: "${SEED_DEV_DATA:-false}"
     volumes:
       - django_static:/app/staticfiles
+      - vault_token:/vault/token:ro
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      vault:
+        condition: service_healthy
     networks:
       - data-net
       - app-net
+    healthcheck:
+      # TODO(B2): switch to http://127.0.0.1:8000/api/health/live/ once Backend merges B2
+      test: ["CMD-SHELL", "curl -fsS -H 'Host: backend' http://127.0.0.1:8000/api/auth/csrf/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 40s
 
   nginx:
     build:
-      context: ./infra/nginx
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infra/nginx/Dockerfile
     container_name: careflow_nginx
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./infra/nginx/conf.d:/etc/nginx/conf.d:ro
       - ./infra/nginx/ssl:/etc/nginx/ssl:ro
       - django_static:/var/www/static:ro
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - app-net
       - public-net
+      - monitoring-net
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: careflow_prometheus
+    restart: unless-stopped
+    volumes:
+      - ./infra/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+    networks:
+      - monitoring-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:9090/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  grafana:
+    image: grafana/grafana:13.3.2-slim
+    container_name: careflow_grafana
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD}"
+      GF_SERVER_ROOT_URL: "https://localhost/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./infra/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    networks:
+      - monitoring-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: careflow_cadvisor
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - monitoring-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    container_name: careflow_node_exporter
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+    networks:
+      - monitoring-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:9100/metrics || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: careflow_postgres_exporter
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATA_SOURCE_URI: "db:5432/${POSTGRES_DB}?sslmode=disable"
+      DATA_SOURCE_USER: "${POSTGRES_USER}"
+      DATA_SOURCE_PASS: "${POSTGRES_PASSWORD}"
+    networks:
+      - monitoring-net
+      - data-net
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:9187/metrics || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
 volumes:
   postgres_data:
-    driver: local
   redis_data:
-    driver: local
   django_static:
-    driver: local
+  vault_data:
+  vault_token:
+  prometheus_data:
+  grafana_data:
 
 networks:
   public-net:
-    driver: bridge
   app-net:
-    driver: bridge
   data-net:
-    driver: bridge
     internal: true
+  monitoring-net:

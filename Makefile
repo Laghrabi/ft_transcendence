@@ -49,7 +49,7 @@ clean: down
 
 fclean: clean
 	@echo "$(RED)Removing all Docker artifacts...$(RESET)"
-	docker system prune -af --volumes
+	$(COMPOSE) down -v --rmi local --remove-orphans
 	@echo "$(RED)Full clean complete.$(RESET)"
 
 re: fclean up
